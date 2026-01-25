@@ -4,10 +4,8 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Author: Bhanu Guragain (Shadow Junior)
-# Architect: Shadow Senior (Claude Sonnet 4.5)
-# Version: 4.0 ULTIMATE HYBRID
 # Date: 2026-01-26
-# Repository: https://github.com/BhanuGuragain0/Scripts
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1: MASTER CONFIGURATION TOGGLES
