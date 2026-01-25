@@ -4,7 +4,7 @@
 
 ![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Kali%20Linux-red.svg)
-![Shell](https://img.shields.io/badge/shell-Zsh-green.svg)
+![Shell](https://img.shields.io/badge/shell-Zsh%2FBash-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 
 **Production-Grade Terminal Environment for Elite Penetration Testers**
@@ -16,6 +16,8 @@ Transform your Kali Linux terminal into a weaponized AI-powered hacking station 
 </div>
 
 ---
+
+> **Note:** This file is the extended documentation. See `README.md` in this folder for the primary quick-start guide.
 
 ## 🎯 **What This Is**
 
@@ -37,7 +39,10 @@ This is not just another terminal customization. This is a **complete penetratio
 ✅ **Modular architecture** for easy customization  
 ✅ **Production-ready security** with comprehensive error handling  
 
----
+
+## ⚖️ **Ethical Use Notice**
+
+This project is intended **only** for authorized security testing, education, and defensive research. You are responsible for complying with all applicable laws and obtaining explicit permission before running any offensive security tooling.
 
 ## ⚡ **Features**
 
@@ -99,14 +104,17 @@ This is not just another terminal customization. This is a **complete penetratio
 
 ```bash
 # Clone the repository
-git clone https://github.com/BhanuGuragain0/Scripts.git
-cd Scripts/Kali_Customization
+git clone https://github.com/BhanuGuragain0/Kali_Linux_Customization.git
+cd Kali_Linux_Customization/Terminal
 
 # Make install script executable
-chmod +x install.sh
+chmod +x kali_customize.sh
 
 # Run installation (will prompt for confirmation)
-./install.sh
+./kali_customize.sh
+
+# Optional: install Bash config too
+./kali_customize.sh --install-bash
 
 # Restart terminal or reload shell
 exec zsh
@@ -141,8 +149,11 @@ done
 fc-cache -fv
 
 # 5. Deploy configuration
-cp zsh.sh ~/.config/zsh/.zshrc
+cp Zsh.sh ~/.config/zsh/.zshrc
 ln -sf ~/.config/zsh/.zshrc ~/.zshrc
+
+# Optional: Bash configuration
+cp bashrc.sh ~/.bashrc
 
 # 6. Configure Powerlevel10k
 p10k configure
@@ -472,7 +483,7 @@ chmod 755 ~/.config/zsh
 chmod 644 ~/.config/zsh/.zshrc
 
 # Fix script permissions
-chmod +x ~/Scripts/Kali_Customization/install.sh
+chmod +x ~/Kali_Linux_Customization/Terminal/kali_customize.sh
 ```
 
 ### **Matrix Rain Crashes Shell**
@@ -491,7 +502,7 @@ mv ~/.config/zsh ~/.config/zsh.bak
 mv ~/.zshrc ~/.zshrc.bak
 
 # Reinstall from scratch
-./install.sh
+./kali_customize.sh
 ```
 
 ---
@@ -560,8 +571,8 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ## 📞 **Support**
 
-- **GitHub Issues**: [Report bugs](https://github.com/BhanuGuragain0/Scripts/issues)
-- **Discussions**: [Ask questions](https://github.com/BhanuGuragain0/Scripts/discussions)
+- **GitHub Issues**: [Report bugs](https://github.com/BhanuGuragain0/Kali_Linux_Customization/issues)
+- **Discussions**: [Ask questions](https://github.com/BhanuGuragain0/Kali_Linux_Customization/discussions)
 
 ---
 
