@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 # ============================================================================
@@ -21,6 +20,7 @@
 # AUTHOR: Shadow@Bhanu
 # VERSION: 2.0.0
 # LICENSE: MIT
+# REPOSITORY: https://github.com/BhanuGuragain0/Kali_Linux_Customization
 # ============================================================================
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
@@ -67,6 +67,7 @@ SKIP_BACKUP=false
 SKIP_FONTS=false
 VERBOSE=false
 DRY_RUN=false
+INSTALL_BASHRC=false
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -211,6 +212,7 @@ backup_existing_configs() {
     
     local files_to_backup=(
         "$HOME/.zshrc"
+        "$HOME/.bashrc"
         "$HOME/.zshenv"
         "$HOME/.p10k.zsh"
         "$ZSH_CONFIG_DIR"
@@ -485,16 +487,19 @@ setup_directory_structure() {
 deploy_configuration() {
     print_header "Deploying Configuration Files"
     
-    # Check if zsh.sh exists in script directory
-    local source_zshrc="$SCRIPT_DIR/zsh.sh"
+    # Check if zshrc.sh exists in script directory
+    local source_zshrc="$SCRIPT_DIR/zshrc.sh"
     if [[ ! -f "$source_zshrc" ]]; then
-        error_exit "zsh.sh not found in $SCRIPT_DIR"
+        source_zshrc="$SCRIPT_DIR/zshrc.sh"
+    fi
+    if [[ ! -f "$source_zshrc" ]]; then
+        error_exit "zshrc.sh or zshrc.sh not found in $SCRIPT_DIR"
     fi
     
     # Deploy main .zshrc
     info "Deploying .zshrc to $ZSH_CONFIG_DIR/.zshrc"
     if [[ "$DRY_RUN" == "false" ]]; then
-        cp "$source_zshrc" "$ZSH_CONFIG_DIR/.zshrc" || error_exit "Failed to copy zsh.sh"
+        cp "$source_zshrc" "$ZSH_CONFIG_DIR/.zshrc" || error_exit "Failed to copy zshrc.sh"
         chmod 644 "$ZSH_CONFIG_DIR/.zshrc"
     else
         info "[DRY RUN] Would copy $source_zshrc to $ZSH_CONFIG_DIR/.zshrc"
@@ -526,6 +531,21 @@ EOF
         info "[DRY RUN] Would create .zshenv"
     fi
     
+    if [[ "$INSTALL_BASHRC" == "true" ]]; then
+        local source_bashrc="$SCRIPT_DIR/bashrc.sh"
+        if [[ -f "$source_bashrc" ]]; then
+            info "Deploying bashrc.sh to ~/.bashrc"
+            if [[ "$DRY_RUN" == "false" ]]; then
+                cp "$source_bashrc" "$HOME/.bashrc" || error_exit "Failed to copy bashrc.sh"
+                chmod 644 "$HOME/.bashrc"
+            else
+                info "[DRY RUN] Would copy $source_bashrc to $HOME/.bashrc"
+            fi
+        else
+            warning "bashrc.sh not found in $SCRIPT_DIR; skipping Bash setup"
+        fi
+    fi
+
     success "Configuration files deployed"
 }
 
@@ -604,6 +624,15 @@ run_health_check() {
     else
         error "✗ Configuration not found"
         ((issues++))
+    fi
+
+    if [[ "$INSTALL_BASHRC" == "true" ]]; then
+        if [[ -f "$HOME/.bashrc" ]]; then
+            success "✓ Bash configuration deployed"
+        else
+            error "✗ Bash configuration not found"
+            ((issues++))
+        fi
     fi
     
     # Check fonts
@@ -696,6 +725,7 @@ ${CYAN}📚 Quick Reference:${NC}
 ${CYAN}📁 Files:${NC}
 
   • Config:      ${WHITE}$ZSH_CONFIG_DIR/.zshrc${NC}
+  • Bash config: ${WHITE}$HOME/.bashrc${NC} (if installed)
   • Backup:      ${WHITE}$BACKUP_DIR${NC}
   • Log:         ${WHITE}$LOG_FILE${NC}
   • Workspace:   ${WHITE}$PENTEST_WORKSPACE${NC}
@@ -708,7 +738,7 @@ ${CYAN}🔧 Customization:${NC}
 
 ${GREEN}🔥 Happy hacking, Shadow! 🔥${NC}
 
-${PURPLE}For issues/feedback: https://github.com/BhanuGuragain0/Scripts${NC}
+${PURPLE}For issues/feedback: https://github.com/BhanuGuragain0/Kali_Linux_Customization${NC}
 
 EOF
 }
@@ -731,6 +761,7 @@ ${YELLOW}Options:${NC}
   --skip-backup           Skip backing up existing configuration
   --skip-fonts            Skip Nerd Fonts installation
   --no-system-update      Skip system package update
+  --install-bash          Install bashrc.sh to ~/.bashrc
 
 ${YELLOW}Examples:${NC}
   # Standard installation
@@ -773,6 +804,10 @@ parse_arguments() {
                 ;;
             --no-system-update)
                 skip_system_update=true
+                shift
+                ;;
+            --install-bash)
+                INSTALL_BASHRC=true
                 shift
                 ;;
             *)
