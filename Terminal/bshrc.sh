@@ -1,4 +1,3 @@
-
 # ~/.bashrc: executed by bash(1) for non-login shells.
 # see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
 # for examples
@@ -159,6 +158,8 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 99: SHADOW@BHANU BASH ENHANCEMENTS
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Repository: https://github.com/BhanuGuragain0/Kali_Linux_Customization
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
