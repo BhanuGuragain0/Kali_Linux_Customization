@@ -1,0 +1,54 @@
+# ============================================================================
+# Kali Linux Useful Scripts - Python Dependencies
+# Author: Shadow Junior
+# Python Version: 3.10+
+# ============================================================================
+
+# Async I/O & HTTP
+asyncio>=3.4.3
+aiohttp>=3.9.0
+aiofiles>=23.2.1
+
+# HTTP & Web
+requests>=2.31.0
+urllib3>=2.1.0
+
+# Web Automation
+selenium>=4.16.0
+webdriver-manager>=4.0.1
+
+# HTML/XML Parsing
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+
+# Security & Cryptography
+cryptography>=41.0.7
+pycryptodome>=3.19.0
+bcrypt>=4.1.2
+PyJWT>=2.8.0
+keyring>=24.3.0
+
+# Network Tools
+netifaces>=0.11.0; sys_platform != 'win32'
+psutil>=5.9.6
+
+# QR Code Generation
+qrcode[pil]>=7.4.2
+
+# System Utilities
+python-dotenv>=1.0.0
+
+# Data Processing
+pyyaml>=6.0.1
+
+# Optional: Enhanced Terminal Output
+# (Removed from optimized scripts but useful for development)
+# colorama>=0.4.6
+# pyfiglet>=1.0.2
+# tqdm>=4.66.1
+
+# Development Tools (optional)
+# pytest>=7.4.3
+# black>=23.12.0
+# flake8>=7.0.0
+# mypy>=1.7.1
