@@ -515,7 +515,7 @@ async def run_server(config: ServerConfig):
     # Keep running
     try:
         await asyncio.Event().wait()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nShutting down...")
     finally:
         await runner.cleanup()
@@ -548,7 +548,10 @@ def main():
         rate_limit_enabled=not args.no_rate_limit
     )
     
-    asyncio.run(run_server(config))
+    try:
+        asyncio.run(run_server(config))
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
