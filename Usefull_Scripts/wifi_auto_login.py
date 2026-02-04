@@ -14,6 +14,7 @@ import logging
 import json
 import re
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, NamedTuple
 from datetime import datetime, timedelta
@@ -404,6 +405,63 @@ class WiFiRecon:
         return best
 
 # ═══════════════════════════════════════════════════════════════════
+# WEBDRIVER DETECTION & INITIALIZATION
+# ═══════════════════════════════════════════════════════════════════
+
+class WebDriverManager:
+    """Manage webdriver availability and initialization"""
+    
+    @staticmethod
+    def find_chromedriver() -> Optional[str]:
+        """Find Chrome webdriver executable"""
+        possible_paths = [
+            "/usr/bin/chromedriver",
+            "/usr/local/bin/chromedriver",
+            "/snap/bin/chromium.chromedriver",
+            "chromedriver",
+        ]
+        
+        for path in possible_paths:
+            found = shutil.which(path)
+            if found:
+                return found
+        return None
+    
+    @staticmethod
+    def find_geckodriver() -> Optional[str]:
+        """Find Firefox webdriver executable"""
+        possible_paths = [
+            "/usr/bin/geckodriver",
+            "/usr/local/bin/geckodriver",
+            "geckodriver",
+        ]
+        
+        for path in possible_paths:
+            found = shutil.which(path)
+            if found:
+                return found
+        return None
+    
+    @staticmethod
+    def get_available_drivers(logger: logging.Logger) -> List[str]:
+        """Check which webdrivers are available"""
+        available = []
+        
+        if WebDriverManager.find_chromedriver():
+            available.append("chrome")
+            logger.info(f"✅ Chrome webdriver available: {WebDriverManager.find_chromedriver()}")
+        else:
+            logger.warning("⚠️  Chrome webdriver not found")
+        
+        if WebDriverManager.find_geckodriver():
+            available.append("firefox")
+            logger.info(f"✅ Firefox webdriver available: {WebDriverManager.find_geckodriver()}")
+        else:
+            logger.warning("⚠️  Firefox webdriver not found")
+        
+        return available
+
+# ═══════════════════════════════════════════════════════════════════
 # STEALTH & ANTI-FINGERPRINTING
 # ═══════════════════════════════════════════════════════════════════
 
@@ -628,7 +686,7 @@ class ConnectionManager:
 # ═══════════════════════════════════════════════════════════════════
 
 class PortalAuthenticator:
-    """Automated captive portal bypass"""
+    """Automated captive portal bypass with multiple strategies"""
     
     def __init__(self, config: Config, logger: logging.Logger):
         self.config = config
@@ -646,62 +704,184 @@ class PortalAuthenticator:
             
             # Cache valid for 4 hours
             return datetime.now() - last_auth < timedelta(hours=4)
-        except Exception:
+        except Exception as e:
+            self.logger.debug(f"Cache check failed: {e}")
             return False
     
     def _cache_auth(self):
         """Cache successful authentication"""
-        cache = {"timestamp": datetime.now().isoformat()}
-        self.cache_file.write_text(json.dumps(cache))
+        try:
+            cache = {"timestamp": datetime.now().isoformat()}
+            self.cache_file.write_text(json.dumps(cache))
+            self.logger.debug("✅ Authentication cached")
+        except Exception as e:
+            self.logger.warning(f"Failed to cache authentication: {e}")
     
-    async def authenticate(self, portal_url: str, username: str, password: str) -> bool:
-        """Authenticate with captive portal"""
+    async def authenticate_via_http(self, portal_url: str, username: str, password: str) -> bool:
+        """HTTP-based fallback authentication (no Selenium required)"""
+        self.logger.info("🔄 Attempting HTTP-based authentication (Selenium unavailable)...")
         
-        if not SELENIUM_AVAILABLE:
-            self.logger.error("❌ Selenium not available")
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Common field names to try
+                field_combinations = [
+                    {"user": "username", "pass": "password"},
+                    {"user": "user", "pass": "password"},
+                    {"user": "email", "pass": "password"},
+                    {"user": "login", "pass": "pass"},
+                ]
+                
+                for fields in field_combinations:
+                    try:
+                        # Prepare form data
+                        form_data = {
+                            fields["user"]: username,
+                            fields["pass"]: password,
+                        }
+                        
+                        self.logger.debug(f"Trying HTTP fields: {fields}")
+                        
+                        async with session.post(
+                            portal_url,
+                            data=form_data,
+                            timeout=aiohttp.ClientTimeout(total=10),
+                            allow_redirects=True
+                        ) as resp:
+                            response_text = await resp.text()
+                            
+                            # Check for success indicators
+                            success_indicators = [
+                                "success", "logged in", "welcome", "authenticated",
+                                "dashboard", "logout", "access granted", "redirect"
+                            ]
+                            
+                            if any(ind in response_text.lower() for ind in success_indicators):
+                                self.logger.info(f"✅ HTTP authentication successful with fields: {fields}")
+                                self._cache_auth()
+                                return True
+                            
+                            # Check for redirect (sign of successful auth)
+                            if resp.status in [200, 301, 302, 303, 307, 308]:
+                                self.logger.debug(f"Response status {resp.status} - might indicate success")
+                    
+                    except Exception as e:
+                        self.logger.debug(f"HTTP attempt with fields {fields} failed: {e}")
+                        continue
+        
+        except Exception as e:
+            self.logger.error(f"HTTP authentication failed: {e}")
+        
+        return False
+    
+    def _find_form_field(self, driver, field_names: List[str], wait_time: int = 5):
+        """Find form field with multiple selector strategies"""
+        wait = WebDriverWait(driver, wait_time)
+        
+        # Try different selector methods
+        selectors_to_try = [
+            lambda name: (By.NAME, name),
+            lambda name: (By.ID, name),
+            lambda name: (By.CSS_SELECTOR, f"input[name='{name}']"),
+            lambda name: (By.CSS_SELECTOR, f"input[id='{name}']"),
+            lambda name: (By.XPATH, f"//input[@name='{name}']"),
+            lambda name: (By.XPATH, f"//input[@id='{name}']"),
+        ]
+        
+        for field_name in field_names:
+            for selector_func in selectors_to_try:
+                try:
+                    selector = selector_func(field_name)
+                    element = wait.until(EC.presence_of_element_located(selector))
+                    self.logger.debug(f"✅ Found field '{field_name}' using {selector}")
+                    return element
+                except Exception:
+                    continue
+        
+        raise TimeoutException(f"Could not find form field with any of these names: {field_names}")
+    
+    async def authenticate_via_selenium(self, portal_url: str, username: str, password: str) -> bool:
+        """Selenium-based authentication with robust error handling"""
+        
+        # Check driver availability first
+        available_drivers = WebDriverManager.get_available_drivers(self.logger)
+        if not available_drivers:
+            self.logger.warning("❌ No webdrivers available (Chrome/Firefox)")
             return False
-        
-        if self._is_cached():
-            self.logger.info("✅ Using cached authentication")
-            return True
         
         driver = None
         
         for attempt in range(1, self.config.max_retries + 1):
             try:
-                # Try Chrome first
-                try:
-                    options = StealthTools.get_stealth_chrome_options()
-                    driver = webdriver.Chrome(options=options)
-                except Exception:
-                    # Fallback to Firefox
+                self.logger.info(f"🌐 Selenium auth attempt {attempt}/{self.config.max_retries}")
+                
+                # Try available drivers
+                for driver_name in available_drivers:
                     try:
-                        options = StealthTools.get_stealth_firefox_options()
-                        driver = webdriver.Firefox(options=options)
-                    except Exception:
-                        self.logger.error("❌ No browser driver available")
-                        return False
+                        if driver_name == "chrome":
+                            self.logger.debug("Initializing Chrome webdriver...")
+                            options = StealthTools.get_stealth_chrome_options()
+                            driver = webdriver.Chrome(options=options)
+                            self.logger.info("✅ Chrome webdriver initialized")
+                            break
+                        elif driver_name == "firefox":
+                            self.logger.debug("Initializing Firefox webdriver...")
+                            options = StealthTools.get_stealth_firefox_options()
+                            driver = webdriver.Firefox(options=options)
+                            self.logger.info("✅ Firefox webdriver initialized")
+                            break
+                    except Exception as e:
+                        self.logger.error(f"Failed to initialize {driver_name}: {e}")
+                        continue
+                
+                if not driver:
+                    self.logger.error("❌ Failed to initialize any webdriver")
+                    return False
                 
                 driver.set_page_load_timeout(self.config.portal_timeout)
                 
                 # Anti-detection
-                driver.execute_script("""
-                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                    window.navigator.chrome = {runtime: {}};
-                """)
+                try:
+                    driver.execute_script("""
+                        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                        window.navigator.chrome = {runtime: {}};
+                    """)
+                except Exception as e:
+                    self.logger.debug(f"Anti-detection script failed: {e}")
                 
                 self.logger.info(f"🌐 Navigating to portal: {portal_url}")
                 driver.get(portal_url)
                 
-                # Wait for form
-                wait = WebDriverWait(driver, 10)
-                username_field = wait.until(
-                    EC.presence_of_element_located((By.NAME, "username"))
+                # Wait and find form fields with multiple strategies
+                self.logger.debug("Searching for login form fields...")
+                username_field = self._find_form_field(
+                    driver,
+                    ["username", "user", "email", "login", "uid"],
+                    wait_time=10
                 )
-                password_field = driver.find_element(By.NAME, "password")
-                submit_btn = driver.find_element(By.NAME, "submit")
+                
+                password_field = self._find_form_field(
+                    driver,
+                    ["password", "pass", "pwd"],
+                    wait_time=5
+                )
+                
+                # Try to find submit button
+                submit_btn = None
+                try:
+                    wait = WebDriverWait(driver, 5)
+                    submit_btn = wait.until(
+                        EC.presence_of_element_located((By.NAME, "submit"))
+                    )
+                except Exception:
+                    try:
+                        submit_btn = driver.find_element(By.XPATH, "//button[@type='submit']")
+                    except Exception:
+                        submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                
+                self.logger.debug("✅ Form fields found")
                 
                 # Fill and submit
+                self.logger.debug(f"Submitting credentials for username: {username}")
                 username_field.clear()
                 username_field.send_keys(username)
                 password_field.clear()
@@ -720,21 +900,52 @@ class PortalAuthenticator:
                 
                 if any(ind in page_source for ind in success_indicators):
                     self._cache_auth()
-                    self.logger.info("✅ Portal authentication successful")
+                    self.logger.info("✅ Portal authentication successful (Selenium)")
                     return True
                 
-            except (TimeoutException, WebDriverException) as e:
-                delay = self.config.retry_delay * (2 ** (attempt - 1))
-                self.logger.warning(f"⚠️  Attempt {attempt}/{self.config.max_retries} failed: {str(e)[:100]}")
+                self.logger.debug(f"Auth not successful - page source snippet: {page_source[:200]}")
                 
-                if attempt < self.config.max_retries:
-                    await asyncio.sleep(delay)
+            except TimeoutException as e:
+                self.logger.error(f"Timeout (attempt {attempt}/{self.config.max_retries}): Form elements not found - {e}")
+                self.logger.debug("This usually means the portal HTML structure doesn't match expected selectors")
+                
+            except WebDriverException as e:
+                self.logger.error(f"Webdriver error (attempt {attempt}/{self.config.max_retries}): {e}")
+                
+            except Exception as e:
+                self.logger.error(f"Unexpected error (attempt {attempt}/{self.config.max_retries}): {type(e).__name__}: {e}")
             
             finally:
                 if driver:
-                    driver.quit()
+                    try:
+                        driver.quit()
+                    except Exception as e:
+                        self.logger.debug(f"Error closing webdriver: {e}")
+                    driver = None
+            
+            if attempt < self.config.max_retries:
+                delay = self.config.retry_delay * (2 ** (attempt - 1))
+                self.logger.info(f"Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
         
         return False
+    
+    async def authenticate(self, portal_url: str, username: str, password: str) -> bool:
+        """Main authentication method with fallback strategy"""
+        
+        if self._is_cached():
+            self.logger.info("✅ Using cached authentication")
+            return True
+        
+        # Try Selenium first if available
+        if SELENIUM_AVAILABLE:
+            result = await self.authenticate_via_selenium(portal_url, username, password)
+            if result:
+                return True
+        
+        # Fallback to HTTP-based authentication
+        self.logger.info("🔄 Selenium failed or unavailable - trying HTTP fallback...")
+        return await self.authenticate_via_http(portal_url, username, password)
 
 # ═══════════════════════════════════════════════════════════════════
 # MAIN ORCHESTRATOR
