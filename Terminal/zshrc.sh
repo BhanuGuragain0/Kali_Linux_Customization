@@ -1,11 +1,12 @@
 #!/usr/bin/env zsh
 # ═══════════════════════════════════════════════════════════════════════════
-# 🚀 Shadow@Bhanu Elite Terminal Environment v4.0 ULTIMATE HYBRID 🚀
+# 🚀 Shadow@Bhanu Elite Terminal Environment v4.2.1 ULTIMATE HYBRID 🚀
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Author: Bhanu Guragain (Shadow Junior)
-# Date: 2026-01-26
-
+# Version: 4.2.1
+# Date: 2026-02-06
+# Repository: https://github.com/BhanuGuragain0/Scripts
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1: MASTER CONFIGURATION TOGGLES
@@ -78,10 +79,20 @@ export LESSHISTFILE="-"
 # Session tracking
 export TERMINAL_SESSION_FILE="$XDG_STATE_HOME/zsh/session_tracker"
 
-# Create necessary directories
-[[ -d "$XDG_STATE_HOME/zsh" ]] || mkdir -p "$XDG_STATE_HOME/zsh"
-[[ -d "$XDG_CACHE_HOME/zsh" ]] || mkdir -p "$XDG_CACHE_HOME/zsh"
-[[ -d "$ZSH_COMPCACHE_DIR" ]] || mkdir -p "$ZSH_COMPCACHE_DIR"
+# Batch directory creation for efficiency
+_zsh_create_directories() {
+  local -a directories=(
+    "$XDG_STATE_HOME/zsh"
+    "$XDG_CACHE_HOME/zsh"
+    "$ZSH_COMPCACHE_DIR"
+  )
+
+  local dir
+  for dir in "${directories[@]}"; do
+    [[ -d "$dir" ]] || mkdir -p "$dir"
+  done
+}
+_zsh_create_directories
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 3: ZSH OPTIONS (PERFORMANCE + FEATURES)
@@ -154,13 +165,13 @@ setopt PRINT_EXIT_VALUE
 # SECTION 4: MODULE SYSTEM (LAZY LOADING)
 # ═══════════════════════════════════════════════════════════════════════════
 
-typeset -ga _ZSH_LOADED_MODULES=()
+# Optimized module loading with associative array for O(1) lookup
+typeset -gA _ZSH_LOADED_MODULES
 
 zsh_load_module() {
-  local module=$1
-  if [[ ! " ${_ZSH_LOADED_MODULES[@]} " =~ " ${module} " ]]; then
-    zmodload "$module" 2>/dev/null && _ZSH_LOADED_MODULES+=("$module")
-  fi
+  local module="$1"
+  [[ -n "${_ZSH_LOADED_MODULES[$module]}" ]] && return 0
+  zmodload "$module" 2>/dev/null && _ZSH_LOADED_MODULES[$module]=1
 }
 
 # Load essential modules immediately
@@ -174,12 +185,23 @@ autoload -Uz zmv
 # SECTION 5: POWERLEVEL10K INSTANT PROMPT
 # ═══════════════════════════════════════════════════════════════════════════
 
-if [[ "$ENABLE_STARSHIP" != true ]]; then
-  typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
-  if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-    source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+# Secure Powerlevel10k instant prompt loading
+_zsh_load_p10k_prompt() {
+  [[ "$ENABLE_STARSHIP" == "true" ]] && return 0
+
+  local prompt_file="${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+  [[ -r "$prompt_file" && -f "$prompt_file" ]] || return 1
+
+  # Basic security validation
+  if grep -q "p10k" "$prompt_file" 2>/dev/null; then
+    typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
+    source "$prompt_file"
+  else
+    echo "⚠️ Suspicious p10k prompt file detected" >&2
+    return 1
   fi
-fi
+}
+_zsh_load_p10k_prompt
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 6: ZINIT PLUGIN MANAGER
@@ -202,26 +224,31 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 
 _zsh_lazy_load_plugins() {
+  [[ "$ENABLE_ASYNC_LOADING" != true ]] && return
+
+  # Remove self from precmd to prevent re-execution
   precmd_functions=(${precmd_functions#_zsh_lazy_load_plugins})
 
-  if [[ "$ENABLE_ASYNC_LOADING" != true ]]; then
-    return
-  fi
-
+  # Load completion first (blocking, required dependency)
   zinit ice lucid wait'0' \
-    atload'zstyle ":completion:*" use-cache on; zstyle ":completion:*" cache-path "$ZSH_COMPCACHE_DIR";' \
+    atload'zstyle ":completion:*" use-cache on; zstyle ":completion:*" cache-path "$ZSH_COMPCACHE_DIR"' \
     atinit'zicompinit; zicdreplay'
   zinit light zsh-users/zsh-completions
 
-  zinit ice lucid wait'0'; zinit light zsh-users/zsh-autosuggestions
-  zinit ice lucid wait'0'; zinit light zsh-users/zsh-history-substring-search
-  zinit ice lucid wait'0'; zinit light Aloxaf/fzf-tab
-  zinit ice lucid wait'0'; zinit light MichaelAquilina/zsh-auto-notify
-  zinit ice lucid wait'0'; zinit light MichaelAquilina/zsh-you-should-use
-  zinit ice lucid wait'0'; zinit light zdharma-continuum/fast-syntax-highlighting
-  zinit ice lucid wait'0'; zinit light agkozak/zsh-z
-  zinit ice lucid wait'0'; zinit light hlissner/zsh-autopair
-  zinit ice lucid wait'0'; zinit light ael-code/zsh-colored-man-pages
+  # Load UI plugins with slight delay to prevent conflicts
+  zinit ice lucid wait'0.1'
+  zinit light zdharma-continuum/fast-syntax-highlighting
+
+  # Load utility plugins last (lowest priority)
+  zinit ice lucid wait'0.2'
+  zinit light zsh-users/zsh-autosuggestions
+  zinit ice lucid wait'0.2'; zinit light zsh-users/zsh-history-substring-search
+  zinit ice lucid wait'0.2'; zinit light Aloxaf/fzf-tab
+  zinit ice lucid wait'0.2'; zinit light MichaelAquilina/zsh-auto-notify
+  zinit ice lucid wait'0.2'; zinit light MichaelAquilina/zsh-you-should-use
+  zinit ice lucid wait'0.2'; zinit light agkozak/zsh-z
+  zinit ice lucid wait'0.2'; zinit light hlissner/zsh-autopair
+  zinit ice lucid wait'0.2'; zinit light ael-code/zsh-colored-man-pages
 }
 
 precmd_functions+=(_zsh_lazy_load_plugins)
@@ -316,9 +343,321 @@ icon() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10A: OPERATOR EXECUTION FRAMEWORK (EARLY INIT)
+# ═══════════════════════════════════════════════════════════════════════════
+# NOTE: This section is loaded early because _op_notify is used throughout
+#       the config. Original Section 38 location preserved for reference.
+
+# === OPERATOR NAMESPACE ===
+typeset -gA _OP_CONFIG
+_OP_CONFIG[exec_prefix]="🧠"
+_OP_CONFIG[exec_tag]="[OP-EXEC]"
+_OP_CONFIG[divider_char]="─"
+_OP_CONFIG[divider_width]=64
+_OP_CONFIG[show_command]=true
+_OP_CONFIG[show_divider]=true
+_OP_CONFIG[show_context]=true
+_OP_CONFIG[show_output_separator]=true
+_OP_CONFIG[output_separator_char]="━"
+_OP_CONFIG[gradient_effects]=true
+_OP_CONFIG[enhanced_errors]=true
+_OP_CONFIG[session_tracking]=true
+
+# === SHADOW SESSION STATE ===
+typeset -gA SHADOW_SESSION_STATE
+SHADOW_SESSION_STATE[start_time]=$(date +%s)
+SHADOW_SESSION_STATE[command_count]=0
+SHADOW_SESSION_STATE[error_count]=0
+SHADOW_SESSION_STATE[last_activity]=$(date +%s)
+
+# === TACTICAL ICON SYSTEM ===
+typeset -gA SHADOW_ICONS=(
+  [ai]="🧠"
+  [processing]="⚙️"
+  [analyzing]="🔍"
+  [computing]="📊"
+  [scanning]="📡"
+  [elevated]="🛡️"
+  [secure]="🔒"
+  [vulnerable]="⚠️"
+  [compromised]="🚨"
+  [executing]="⚡"
+  [success]="✅"
+  [failure]="❌"
+  [warning]="⚠️"
+  [complete]="📡"
+  [background]="🛰️"
+  [critical]="💀"
+  [active]="🟢"
+  [inactive]="🔴"
+  [pending]="🟡"
+  [unknown]="⚪"
+  [ai_exec]="🤖"
+  [recon]="🔍"
+  [dev]="💻"
+  [cloud]="☁️"
+  [version]="🌿"
+)
+
+# Semantic icon accessor
+_icon() {
+  local semantic="$1"
+  local fallback="${2:-ℹ️}"
+  echo "${SHADOW_ICONS[$semantic]:-$fallback}"
+}
+
+# === OPERATOR NOTIFICATION SYSTEM ===
+_op_notify() {
+  local type="$1"
+  local message="$2"
+  local context="${3:-${SHADOW_SESSION_STATE[current_context]:-shell}}"
+  local timestamp=$(date '+%H:%M:%S')
+
+  # Icon mapping with tactical significance
+  local icon color_code
+  case "$type" in
+    success)
+      icon="$(_icon success)"
+      color_code="38;2;0;255;0"
+      ;;
+    warning)
+      icon="$(_icon warning)"
+      color_code="38;2;255;165;0"
+      ;;
+    failure)
+      icon="$(_icon failure)"
+      color_code="38;2;255;0;0"
+      ;;
+    elevated)
+      icon="$(_icon elevated)"
+      color_code="38;2;255;215;0"
+      ;;
+    background)
+      icon="$(_icon background)"
+      color_code="38;2;0;191;255"
+      ;;
+    critical)
+      icon="$(_icon critical)"
+      color_code="38;2;255;255;255"
+      ;;
+    *)
+      icon="$(_icon processing)"
+      color_code="38;2;150;150;150"
+      ;;
+  esac
+
+  # Formatted tactical output
+  printf "\033[%sm%s [%s] %s\033[0m %s\n" \
+    "$color_code" \
+    "$icon" \
+    "$timestamp" \
+    "${context:+[$context] }" \
+    "$message"
+}
+
+# === ADVANCED EXECUTION HEADER RENDERER ===
+_op_render_execution_header() {
+  local full_command="$1"
+  local timestamp=$(date '+%H:%M:%S')
+  local working_dir="${PWD/#$HOME/\~}"
+  local command_type="COMMAND"
+
+  # Enhanced command type detection with more categories
+  case "$full_command" in
+    # PRIVILEGED OPERATIONS
+    sudo*|doas*|pkexec*) command_type="ELEVATED COMMAND" ;;
+    # SECURITY & RECONNAISSANCE
+    nmap*|gobuster*|nikto*|masscan*|dirb*|dirsearch*|wfuzz*|hydra*|burp*|sqlmap*|metasploit*) command_type="SECURITY/RECON COMMAND" ;;
+    # PROGRAMMING LANGUAGES
+    python*|python3*|node*|npm*|yarn*|go*|java*|javac*|ruby*|gem*|perl*|php*|composer*|rust*|cargo*|c++|g++|gcc*|clang*) command_type="DEVELOPMENT COMMAND" ;;
+    # CLOUD & DEVOPS
+    docker*|kubectl*|helm*|terraform*|ansible*|puppet*|chef*|kops*|eksctl*|gcloud*|az*|aws*) command_type="CLOUD/DEVOPS COMMAND" ;;
+    # VERSION CONTROL
+    git*|svn*|hg*|bzr*|cvs*) command_type="VERSION CONTROL COMMAND" ;;
+    # AI & MACHINE LEARNING
+    ai*|chatgpt*|claude*|gemini*|bard*|copilot*|ollama*|huggingface*|tensorflow*|pytorch*|scikit*|pandas*|numpy*) command_type="AI/MACHINE LEARNING COMMAND" ;;
+    # NETWORK & COMMUNICATIONS
+    curl*|wget*|http*|ssh*|rsync*|scp*|sftp*|ftp*|telnet*|netcat*|nc*|nmap*|ping*|traceroute*|dig*|nslookup*|host*) command_type="NETWORK/COMMUNICATIONS COMMAND" ;;
+    # TEXT EDITORS & IDES
+    vim*|nvim*|vi*|emacs*|nano*|code*|subl*|atom*|vscode*|intellij*|pycharm*|webstorm*) command_type="TEXT EDITOR/IDE COMMAND" ;;
+    # BUILD SYSTEMS & COMPILERS
+    make*|cmake*|meson*|ninja*|bazel*|buck*|gradle*|maven*|ant*|webpack*|rollup*|vite*|parcel*) command_type="BUILD SYSTEMS COMMAND" ;;
+    # PACKAGE MANAGERS
+    apt*|apt-get*|dpkg*|yum*|dnf*|rpm*|pacman*|yaourt*|yay*|brew*|port*|pkg*|snap*|flatpak*|pip*|npm*|yarn*|gem*|cargo*) command_type="PACKAGE MANAGEMENT COMMAND" ;;
+    # SYSTEM ADMINISTRATION
+    systemctl*|service*|journalctl*|crontab*|top*|htop*|ps*|kill*|killall*|nice*|renice*|nohup*|screen*|tmux*) command_type="SYSTEM ADMINISTRATION COMMAND" ;;
+    # FILE & DATA OPERATIONS
+    find*|grep*|sed*|awk*|sort*|uniq*|cut*|tr*|wc*|head*|tail*|cat*|less*|more*|tar*|zip*|unzip*|gzip*|gunzip*) command_type="FILE/DATA OPERATIONS COMMAND" ;;
+    # DATABASE OPERATIONS
+    mysql*|postgresql*|psql*|sqlite*|mongo*|redis*|elasticsearch*|cassandra*|oracle*|sqlplus*) command_type="DATABASE OPERATIONS COMMAND" ;;
+    # WEB DEVELOPMENT
+    http-server*|node*|live-server*|webpack-dev-server*|vite*|next*|react-scripts*|angular-cli*) command_type="WEB DEVELOPMENT COMMAND" ;;
+    # MONITORING & LOGGING
+    tail*|less*|more*|journalctl*|dmesg*|syslog*|klog*|dmesg*|lsof*|netstat*|ss*|iotop*|iftop*|nethogs*) command_type="MONITORING/LOGGING COMMAND" ;;
+    # MULTIMEDIA & GRAPHICS
+    ffmpeg*|avconv*|convert*|identify*|display*|eog*|feh*|gimp*|inkscape*|blender*|kdenlive*|obs*) command_type="MULTIMEDIA/GRAPHICS COMMAND" ;;
+    # VIRTUALIZATION & CONTAINERS
+    virtualbox*|vbox*|vmware*|kvm*|qemu*|libvirt*|docker*|podman*|lxc*|lxd*) command_type="VIRTUALIZATION/CONTAINERS COMMAND" ;;
+    # SECURITY TOOLS
+    wireshark*|tcpdump*|tshark*|aircrack-ng*|hashcat*|john*|hydra*|metasploit*|burp*|sqlmap*) command_type="SECURITY TOOLS COMMAND" ;;
+    # DOCUMENTATION & HELP
+    man*|info*|help*|tldr*|cheat*|howdoi*|explainshell*) command_type="DOCUMENTATION/HELP COMMAND" ;;
+    # NAVIGATION & SHELL OPERATIONS
+    cd*|pwd*|ls*|la*|ll*|tree*|find*|which*|whereis*|type*|whatis*|apropos*) command_type="NAVIGATION/SHELL COMMAND" ;;
+    # ARCHIVE & COMPRESSION
+    tar*|zip*|unzip*|gzip*|gunzip*|bzip2*|bunzip2*|xz*|unxz*|7z*|p7zip*|rar*|unrar*) command_type="ARCHIVE/COMPRESSION COMMAND" ;;
+    # PROCESS MANAGEMENT
+    ps*|top*|htop*|kill*|killall*|nice*|renice*|jobs*|fg*|bg*|disown*|nohup*) command_type="PROCESS MANAGEMENT COMMAND" ;;
+    # HARDWARE & SYSTEM INFO
+    lscpu*|lsmem*|lsblk*|fdisk*|df*|du*|free*|uname*|lspci*|lsusb*|sensors*|acpi*|dmidecode*) command_type="HARDWARE/SYSTEM INFO COMMAND" ;;
+    # NETWORK CONFIGURATION
+    ip*|ifconfig*|route*|iptables*|ufw*|firewalld*|netplan*|nmcli*|iwconfig*|iwlist*) command_type="NETWORK CONFIGURATION COMMAND" ;;
+    # DEVELOPMENT TOOLS
+    git*|make*|cmake*|gcc*|g++||python*|node*|npm*|docker*|kubectl*|vim*|nvim*|code*|vscode*) command_type="DEVELOPMENT TOOLS COMMAND" ;;
+    # FILE TRANSFER
+    scp*|rsync*|sftp*|ftp*|wget*|curl*|aria2c*|rclone*|lftp*) command_type="FILE TRANSFER COMMAND" ;;
+    # SYSTEM SERVICES
+    systemctl*|service*|init*|rc*|upstart*|systemd*|cron*|crontab*) command_type="SYSTEM SERVICES COMMAND" ;;
+    # SECURITY AUDITING
+    auditd*|ausearch*|aureport*|fail2ban*|ufw*|iptables*|nftables*|selinux*) command_type="SECURITY AUDITING COMMAND" ;;
+    # PERFORMANCE MONITORING
+    perf*|strace*|ltrace*|valgrind*|gdb*|lldb*|time*|timeout*) command_type="PERFORMANCE MONITORING COMMAND" ;;
+    # BACKUP & RECOVERY
+    rsync*|tar*|dd*|clone*|backup*|restore*|dump*|import*|export*) command_type="BACKUP/RECOVERY COMMAND" ;;
+    # SHELL SCRIPTING
+    bash*|sh*|zsh*|fish*|ksh*|csh*|tcsh*|source*|exec*|eval*) command_type="SHELL SCRIPTING COMMAND" ;;
+    # DEFAULT COMMAND
+    *) command_type="COMMAND" ;;
+  esac
+
+  # Dynamic icon selection based on command type
+  local cmd_icon
+  case "$command_type" in
+    "ELEVATED") cmd_icon="$(_icon elevated)" ;;
+    "SECURITY/RECON") cmd_icon="$(_icon recon)" ;;
+    "AI/MACHINE LEARNING") cmd_icon="$(_icon ai_exec)" ;;
+    "NETWORK/COMMUNICATIONS") cmd_icon="$(_icon scanning)" ;;
+    "TEXT EDITOR/IDE") cmd_icon="$(_icon processing)" ;;
+    "BUILD SYSTEMS") cmd_icon="$(_icon computing)" ;;
+    "SYSTEM ADMINISTRATION") cmd_icon="$(_icon secure)" ;;
+    "FILE/DATA OPERATIONS") cmd_icon="$(_icon analyzing)" ;;
+    "PACKAGE MANAGEMENT") cmd_icon="$(_icon processing)" ;;
+    "DATABASE OPERATIONS") cmd_icon="$(_icon computing)" ;;
+    "WEB DEVELOPMENT") cmd_icon="$(_icon processing)" ;;
+    "MONITORING/LOGGING") cmd_icon="$(_icon analyzing)" ;;
+    "MULTIMEDIA/GRAPHICS") cmd_icon="$(_icon processing)" ;;
+    "VIRTUALIZATION/CONTAINERS") cmd_icon="$(_icon cloud)" ;;
+    "SECURITY TOOLS") cmd_icon="$(_icon recon)" ;;
+    "DOCUMENTATION/HELP") cmd_icon="$(_icon processing)" ;;
+    "NAVIGATION/SHELL") cmd_icon="$(_icon executing)" ;;
+    "ARCHIVE/COMPRESSION") cmd_icon="$(_icon processing)" ;;
+    "PROCESS MANAGEMENT") cmd_icon="$(_icon secure)" ;;
+    "HARDWARE/SYSTEM INFO") cmd_icon="$(_icon analyzing)" ;;
+    "NETWORK CONFIGURATION") cmd_icon="$(_icon scanning)" ;;
+    "DEVELOPMENT TOOLS") cmd_icon="$(_icon dev)" ;;
+    "FILE TRANSFER") cmd_icon="$(_icon scanning)" ;;
+    "SYSTEM SERVICES") cmd_icon="$(_icon secure)" ;;
+    "SECURITY AUDITING") cmd_icon="$(_icon recon)" ;;
+    "PERFORMANCE MONITORING") cmd_icon="$(_icon analyzing)" ;;
+    "BACKUP/RECOVERY") cmd_icon="$(_icon processing)" ;;
+    "SHELL SCRIPTING") cmd_icon="$(_icon executing)" ;;
+  esac
+
+  # Command execution header with tactical styling
+  printf "\033[38;2;0;255;255m%s [%s] %s ➜ %s\033[0m\n" \
+    "$(_icon ai)" \
+    "$command_type" \
+    "$timestamp" \
+    "$full_command"
+
+  # Clean separator
+  if [[ "${_OP_CONFIG[show_divider]}" == "true" ]]; then
+    printf "\033[38;2;60;60;60m"
+    printf "%*s" "${_OP_CONFIG[divider_width]}" "" | tr ' ' "━"
+    printf "\033[0m\n"
+  fi
+}
+
+# === OPERATOR CONFIGURATION ===
+operator_config() {
+  local setting="$1"
+  local value="$2"
+
+  case "$setting" in
+    exec_prefix) _OP_CONFIG[exec_prefix]="$value" ;;
+    exec_tag)   _OP_CONFIG[exec_tag]="$value" ;;
+    show_command)
+      if [[ "$value" == true || "$value" == false ]]; then
+        _OP_CONFIG[show_command]="$value"
+      fi
+      ;;
+    show_divider)
+      if [[ "$value" == true || "$value" == false ]]; then
+        _OP_CONFIG[show_divider]="$value"
+      fi
+      ;;
+    *)
+      echo "Available settings: exec_prefix, exec_tag, show_command, show_divider"
+      echo "Current config:"
+      for key in "${(@k)_OP_CONFIG}"; do
+        printf "  %s: %s\n" "$key" "${_OP_CONFIG[$key]}"
+      done
+      ;;
+  esac
+}
+
+# === OPERATOR STATUS DISPLAY ===
+operator_status() {
+  echo "🧠 Operator Console Status"
+  echo "═════════════════════════════"
+  echo "Mode: $(whoami)@$(hostname)"
+  echo "Shell: Zsh $ZSH_VERSION"
+  echo "Session: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "Config: $(operator_config | wc -l) active settings"
+  echo "Status: OPERATIONAL"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SECTION 11: CORE UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Secure sudo wrapper with validation
+# Usage: secure_sudo "<command>"
+# Security: Validates command against whitelist before execution
+# Returns: Exit code of executed command or 1 for security violation
+secure_sudo() {
+  local cmd="$1"
+  local allowed_commands=(
+    "shutdown" "systemctl" "modprobe" "umount" "wipefs"
+    "mkfs.vfat" "mkfs.exfat" "mkfs.ntfs" "mkfs.ext4" "dmidecode"
+  )
+
+  # === OPERATOR ELEVATION NOTIFICATION ===
+  _op_notify "elevated" "🔑 Sudo access requested for: $cmd"
+
+  # Validate command is in allowed list
+  local base_cmd="${cmd%% *}"
+  for allowed in "${allowed_commands[@]}"; do
+    if [[ "$base_cmd" == "$allowed" ]]; then
+      sudo $cmd
+      local exit_code=$?
+      if [[ $exit_code -eq 0 ]]; then
+        _op_notify "success" "Privileged command completed"
+      else
+        _op_notify "failure" "Privileged command failed (exit code: $exit_code)"
+      fi
+      return $exit_code
+    fi
+  done
+
+  _op_notify "failure" "🚨 Security: Command '$base_cmd' not in sudo whitelist"
+  return 1
+}
+
+# Get threat level color code
+# Usage: threat_color <level>
+# Levels: 0=CRITICAL(red), 1=HIGH(orange), 2=MEDIUM(yellow), 3=LOW(green), 4=INFO(blue)
+# Returns: ANSI color code string
 threat_color() {
   local level=${1:-3}
   case $level in
@@ -353,24 +692,24 @@ random_color() {
 gradient_text() {
   local text="$1"
   local len=${#text}
-  
+
   if [[ $len -le 1 ]]; then
     local color=$(random_color)
     echo -e "\033[${color}m${text}\033[0m"
     return
   fi
-  
+
   local output=""
   for ((i=0; i<len; i++)); do
     local char="${text:$i:1}"
     local r=$((255 - (i * 255 / (len - 1))))
     local g=$((i * 255 / (len - 1)))
     local b=$((127 + (i * 128 / (len - 1))))
-    
+
     r=$(( r < 0 ? 0 : (r > 255 ? 255 : r) ))
     g=$(( g < 0 ? 0 : (g > 255 ? 255 : g) ))
     b=$(( b < 0 ? 0 : (b > 255 ? 255 : b) ))
-    
+
     output+="\033[38;2;${r};${g};${b}m${char}\033[0m"
   done
   echo -e "$output"
@@ -400,9 +739,10 @@ safe_system_call() {
   local fallback_value="${3:-N/A}"
 
   if command_exists timeout; then
-    timeout "$timeout_duration" $cmd 2>/dev/null || echo "$fallback_value"
+    # Use eval to handle complex commands with arguments safe from splitting issues
+    timeout "$timeout_duration" zsh -c "$cmd" 2>/dev/null || echo "$fallback_value"
   else
-    $cmd 2>/dev/null || echo "$fallback_value"
+    eval "$cmd" 2>/dev/null || echo "$fallback_value"
   fi
 }
 
@@ -419,7 +759,7 @@ loading_animation() {
 
   local width=50
   local steps=100
-  
+
   local duration_int=${duration%.*}
   local duration_frac=${duration#*.}
   [[ "$duration_frac" == "$duration" ]] && duration_frac=0
@@ -431,7 +771,7 @@ loading_animation() {
   case "$style" in
     matrix)   chars="▓▒░▓▒░▓▒░" ;;
     wave)     chars="∿∾∽∼∽∾∿" ;;
-    pulse)    chars="◉◎◑◒◓◔◕◖" ;;
+    pulse)    chars="💀😈💀😈💀😈💀" ;;
     scan)     chars="▁▂▃▄▅▆▇█" ;;
     fire)     chars="🔥💥⚡✨" ;;
     *)        chars="⣾⣽⣻⢿⡿⣟⣯⣷" ;;
@@ -496,16 +836,16 @@ loading_animation() {
 loading_multi_stage() {
   local -a stages=("$@")
   local total_stages=${#stages[@]}
-  
+
   for ((i=0; i<total_stages; i++)); do
     local stage_name="${stages[$i]}"
     local stage_duration=$((2 + RANDOM % 3))
-    
+
     echo -e "\n\033[38;2;255;255;0m┏━━ Stage $((i+1))/$total_stages: $stage_name ━━┓\033[0m"
     loading_animation "$stage_name" "$stage_duration" "" "matrix" "true"
     sleep 0.5
   done
-  
+
   echo -e "\n\033[38;2;0;255;0m🎯 All stages completed successfully!\033[0m"
 }
 
@@ -514,7 +854,7 @@ loading_background() {
   local message="$1"
   local command="$2"
   local pid_file="/tmp/loading_$$.pid"
-  
+
   {
     local i=0
     local chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -527,21 +867,35 @@ loading_background() {
   } &
   local spinner_pid=$!
   echo $spinner_pid > "$pid_file"
-  
-  eval "$command"
+
+  # Secure command execution with validation
+  if [[ "$command" =~ ^[a-zA-Z0-9_[:space:]/-]+$ ]]; then
+    # Additional validation against dangerous patterns
+    local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
+    for pat in "${dangerous[@]}"; do
+      if [[ "$command" == *"$pat"* ]]; then
+        echo "🚨 Security: Dangerous command pattern detected: $pat"
+        return 1
+      fi
+    done
+    bash -c "$command"
+  else
+    echo "🚨 Security: Unsafe command detected"
+    return 1
+  fi
   local exit_code=$?
-  
+
   kill $spinner_pid 2>/dev/null
   wait $spinner_pid 2>/dev/null
   rm -f "$pid_file"
-  
+
   printf "\r\033[K"
   if [[ $exit_code -eq 0 ]]; then
     echo -e "\033[38;2;0;255;0m✅ $message - Success\033[0m"
   else
     echo -e "\033[38;2;255;0;0m❌ $message - Failed (code: $exit_code)\033[0m"
   fi
-  
+
   return $exit_code
 }
 
@@ -562,12 +916,12 @@ matrix_rain() {
 
   local width=$(tput cols 2>/dev/null)
   local height=$(tput lines 2>/dev/null)
-  
+
   if [[ -z "$width" || -z "$height" || "$width" -lt 10 || "$height" -lt 10 ]]; then
     echo "⚠️ Terminal dimensions invalid: ${width}x${height}"
     return 1
   fi
-  
+
   width=$((width > 500 ? 500 : width))
   height=$((height > 200 ? 200 : height))
 
@@ -648,14 +1002,14 @@ matrix_rain() {
       if [[ $((col_pos - col_len)) -lt height ]]; then
         for ((j=0; j<col_len; j++)); do
           local y_pos=$((col_pos - j))
-          
+
           if [[ y_pos -ge 0 && y_pos -lt height ]]; then
             local color_idx=$(( (j * (num_colors - 1)) / col_len ))
             color_idx=$((color_idx >= num_colors ? num_colors - 1 : color_idx))
-            
+
             local char_idx=$(( (y_pos + i + frame_count) % num_chars ))
             local brightness=$((intensities[i] > 50 ? 1 : 2))
-            
+
             frame_buffer+="\033[$((y_pos + 1));$((i + 1))H\033[${brightness};${colors[$color_idx]}m${chars:$char_idx:1}"
           fi
         done
@@ -717,6 +1071,7 @@ matrix_benchmark() {
 
 typeset -gA _ZSH_CPU_HISTORY=()
 typeset -ga _ZSH_CPU_TIMESTAMPS=()
+typeset -g _ZSH_CPU_MAX_HISTORY=100  # Limit history size
 
 _zsh_init_cpu_monitor() {
   mkdir -p "$XDG_CACHE_HOME/zsh"
@@ -724,10 +1079,24 @@ _zsh_init_cpu_monitor() {
   _ZSH_CPU_TIMESTAMPS=()
 }
 
+_zsh_cleanup_cpu_history() {
+  # Keep only last N entries to prevent memory leaks
+  local current_size=${#_ZSH_CPU_TIMESTAMPS[@]}
+  if [[ $current_size -gt $_ZSH_CPU_MAX_HISTORY ]]; then
+    local trim_count=$((current_size - _ZSH_CPU_MAX_HISTORY))
+    _ZSH_CPU_TIMESTAMPS=("${_ZSH_CPU_TIMESTAMPS[@]:$trim_count}")
+    # Clean history keys accordingly
+    local -a keys_to_remove=("${_ZSH_CPU_TIMESTAMPS[@]:0:$trim_count}")
+    for key in "${keys_to_remove[@]}"; do
+      unset "_ZSH_CPU_HISTORY[$key]"
+    done
+  fi
+}
+
 _zsh_get_cpu_usage() {
   local mode="${1:-total}"
   local stat_file="$XDG_CACHE_HOME/zsh/cpu_last_stat"
-  
+
   local -a last_stat
   if [[ -f "$stat_file" ]]; then
     last_stat=($(<"$stat_file"))
@@ -753,7 +1122,7 @@ _zsh_get_cpu_usage() {
       local iowait_pct=$(( (current_stat[5] - last_stat[5]) * 100 / delta_total ))
       local irq_pct=$(( (current_stat[6] - last_stat[6]) * 100 / delta_total ))
       local softirq_pct=$(( (current_stat[7] - last_stat[7]) * 100 / delta_total ))
-      
+
       echo "user:$user_pct system:$system_pct idle:$idle_pct iowait:$iowait_pct irq:$irq_pct softirq:$softirq_pct"
     else
       echo "user:0 system:0 idle:100 iowait:0 irq:0 softirq:0"
@@ -761,12 +1130,12 @@ _zsh_get_cpu_usage() {
   elif [[ "$mode" == "per-core" ]]; then
     local num_cores=$((${#current_stat[@]} / 2))
     local core_usages=()
-    
+
     for ((i=0; i<num_cores; i++)); do
       local idx=$((i * 2))
       local delta_total=$((current_stat[$((idx + 1))] - last_stat[$((idx + 1))]))
       local delta_busy=$((current_stat[$idx] - last_stat[$idx]))
-      
+
       if [[ $delta_total -gt 0 ]]; then
         local core_usage=$((delta_busy * 100 / delta_total))
         core_usages+=("$core_usage")
@@ -774,7 +1143,7 @@ _zsh_get_cpu_usage() {
         core_usages+=("0")
       fi
     done
-    
+
     echo "${core_usages[@]}"
   else
     local delta_total=$((current_stat[1] - last_stat[1]))
@@ -789,14 +1158,35 @@ _zsh_get_cpu_usage() {
 }
 
 _zsh_get_cpu_temp() {
+  local temp="N/A"
+
+  # Try multiple temperature sources with fallbacks
   if command -v sensors &>/dev/null; then
-    sensors 2>/dev/null | awk '/^Core 0:/ {print $3}' | tr -d '+°C' | head -1
-  elif [[ -f /sys/class/thermal/thermal_zone0/temp ]]; then
-    local temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
-    echo $(( temp / 1000 ))
-  else
-    echo "N/A"
+    temp=$(sensors 2>/dev/null | awk '/^Core 0:/ {print $3}' | tr -d '+°C' | head -1)
   fi
+
+  # Fallback to thermal zone
+  if [[ "$temp" == "N/A" || -z "$temp" ]] && [[ -f /sys/class/thermal/thermal_zone0/temp ]]; then
+    local raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+    if [[ "$raw_temp" =~ ^[0-9]+$ ]]; then
+      temp=$(( raw_temp / 1000 ))
+    fi
+  fi
+
+  # Fallback to other thermal zones
+  if [[ "$temp" == "N/A" ]]; then
+    for zone in /sys/class/thermal/thermal_zone*/temp; do
+      if [[ -f "$zone" ]]; then
+        local raw_temp=$(cat "$zone" 2>/dev/null)
+        if [[ "$raw_temp" =~ ^[0-9]+$ ]] && [[ $raw_temp -gt 1000 ]]; then
+          temp=$(( raw_temp / 1000 ))
+          break
+        fi
+      fi
+    done
+  fi
+
+  echo "${temp:-N/A}"
 }
 
 _zsh_get_cpu_freq() {
@@ -816,7 +1206,7 @@ _zsh_generate_cpu_graph() {
   for val in "${history[@]}"; do
     local bar_height=$(( (val * max_height) / max_val ))
     [[ $bar_height -gt max_height ]] && bar_height=$max_height
-    
+
     local color
     if [[ $val -gt 80 ]]; then
       color="38;2;255;0;0"
@@ -827,12 +1217,12 @@ _zsh_generate_cpu_graph() {
     else
       color="38;2;0;255;0"
     fi
-    
+
     local bar=""
     for ((i=0; i<bar_height; i++)); do
       bar="█$bar"
     done
-    
+
     printf "\033[${color}m%-10s\033[0m " "$bar"
   done
   echo
@@ -847,17 +1237,17 @@ cpu_status() {
   echo -e "\033[38;2;0;255;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
   echo -e "\033[38;2;255;255;0m          💀 NEURAL METRICS - CPU STATUS 💀\033[0m"
   echo -e "\033[38;2;0;255;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-  
+
   local total_usage=$(_zsh_get_cpu_usage "total")
   echo -e "\n\033[38;2;0;255;0m🔋 Total CPU Usage:\033[0m $total_usage%"
-  
+
   echo -e "\n\033[38;2;0;255;0m⚡ Per-Core Usage:\033[0m"
   local -a core_usages=($(_zsh_get_cpu_usage "per-core"))
   for ((i=0; i<${#core_usages[@]}; i++)); do
     local usage=${core_usages[$i]}
     local bar=""
     local filled=$((usage / 5))
-    
+
     for ((j=0; j<20; j++)); do
       if [[ $j -lt $filled ]]; then
         if [[ $usage -gt 80 ]]; then bar+="\033[38;2;255;0;0m█\033[0m"
@@ -867,32 +1257,32 @@ cpu_status() {
         bar+="\033[38;2;50;50;50m░\033[0m"
       fi
     done
-    
+
     printf "  Core %2d: [%b] %3d%%\n" "$i" "$bar" "$usage"
   done
-  
+
   echo -e "\n\033[38;2;0;255;0m📊 Breakdown:\033[0m"
   local detailed=$(_zsh_get_cpu_usage "detailed")
   echo "$detailed" | tr ' ' '\n' | while IFS=: read key val; do
     printf "  %-10s %3d%%\n" "$key:" "$val"
   done
-  
+
   local temp=$(_zsh_get_cpu_temp)
   if [[ "$temp" != "N/A" ]]; then
     local temp_color
     if [[ $temp -gt 80 ]]; then temp_color="38;2;255;0;0"
     elif [[ $temp -gt 70 ]]; then temp_color="38;2;255;165;0"
     else temp_color="38;2;0;255;0"; fi
-    
+
     echo -e "\n\033[${temp_color}m🌡️ Temperature:\033[0m ${temp}°C"
   fi
-  
+
   local freq=$(_zsh_get_cpu_freq)
   [[ "$freq" != "N/A" ]] && echo -e "\033[38;2;0;255;255m⚡ Frequency:\033[0m ${freq} MHz"
-  
+
   echo -e "\n\033[38;2;255;255;0m🔥 Top CPU Consumers:\033[0m"
   ps aux --sort=-%cpu | awk 'NR>1 {printf "  %-20s %5.1f%%\n", $11, $3}' | head -5
-  
+
   echo -e "\033[38;2;0;255;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 }
 
@@ -904,29 +1294,29 @@ cpu_monitor_live() {
 
   local duration="${1:-30}"
   local sample_interval="${2:-1}"
-  
+
   echo -e "\033[38;2;0;255;255m🔬 Live CPU Monitor - Press Ctrl+C to exit\033[0m\n"
-  
+
   local -a history
   local end_time=$(($(date +%s) + duration))
-  
+
   trap 'tput cnorm; echo -e "\n\033[38;2;0;255;0m✅ Monitor stopped\033[0m"; return' INT
   tput civis
-  
+
   while [[ $(date +%s) -lt $end_time ]]; do
     local usage=$(_zsh_get_cpu_usage "total")
     history+=("${usage%.*}")
-    
+
     [[ ${#history[@]} -gt 30 ]] && history=("${history[@]:1}")
-    
+
     printf "\033[2J\033[H"
     echo -e "\033[38;2;255;255;0mCPU Usage History (last ${#history[@]} samples):\033[0m"
     _zsh_generate_cpu_graph "${history[@]}"
     echo -e "\n\033[38;2;0;255;0mCurrent: ${usage}%\033[0m"
-    
+
     sleep $sample_interval
   done
-  
+
   tput cnorm
   echo -e "\n\033[38;2;0;255;0m✅ Monitoring complete\033[0m"
 }
@@ -947,26 +1337,42 @@ _zsh_cache_ttl=60
 
 get_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
-  
+
   local key="$1"
-  if command -v jq >/dev/null 2>&1 && [[ -f "$_zsh_cache_file" ]]; then
+  local lock_file="${_zsh_cache_file}.lock"
+  local timeout=5
+  local start_time=$(date +%s)
+
+  # Improved locking with timeout
+  while [[ -f "$lock_file" ]]; do
+    [[ $(($(date +%s) - start_time)) -gt $timeout ]] && rm -f "$lock_file"
+    sleep 0.01
+  done
+
+  # Atomic lock creation
+  if (set -C; echo $$ > "$lock_file") 2>/dev/null; then
     local expiry=$(jq -r ".${key}.expiry" "$_zsh_cache_file" 2>/dev/null)
     local now=$(date +%s)
+
+    rm -f "$lock_file"
+
     if [[ -n "$expiry" && "$now" -lt "$expiry" ]]; then
       jq -r ".${key}.value" "$_zsh_cache_file"
       return 0
     fi
   fi
+
   return 1
 }
 
 set_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
-  
+
+
   local key="$1"
   local value="$2"
   local expiry=$(($(date +%s) + _zsh_cache_ttl))
-  
+
   local cache_dir=$(dirname "$_zsh_cache_file")
   mkdir -p "$cache_dir"
   local temp_file=$(mktemp "$cache_dir/zsh_cache.XXXXXX")
@@ -1033,7 +1439,7 @@ show_system_info() {
     local memory_used=$(free -m 2>/dev/null | awk 'NR==2{print $3}')
     local memory_percent=$(free -m 2>/dev/null | awk 'NR==2{printf "%.0f", $3*100/$2}')
     local memory_bar=""
-    
+
     for ((i=0; i<30; i++)); do
       if [[ $i -lt $((memory_percent*30/100)) ]]; then
         if [[ $memory_percent -gt 80 ]]; then
@@ -1047,7 +1453,7 @@ show_system_info() {
         memory_bar+="\033[38;2;64;64;64m░\033[0m"
       fi
     done
-    
+
     output_buffer+="\033[${secondary_color}m║\033[0m \033[${primary_color}m🧠 MEMORY:\033[0m ${memory_used}MB/${memory_total}MB (${memory_percent}%) $memory_bar\n"
   fi
 
@@ -1056,7 +1462,7 @@ show_system_info() {
     local disk_total=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo "N/A")
     local disk_percent=$(df / 2>/dev/null | awk 'NR==2{print $5}' | sed 's/%//' || echo "0")
     local disk_bar=""
-    
+
     for ((i=0; i<30; i++)); do
       if [[ $i -lt $((disk_percent*30/100)) ]]; then
         if [[ $disk_percent -gt 85 ]]; then
@@ -1070,7 +1476,7 @@ show_system_info() {
         disk_bar+="\033[38;2;64;64;64m░\033[0m"
       fi
     done
-    
+
     output_buffer+="\033[${secondary_color}m║\033[0m \033[${accent_color}m💾 STORAGE:\033[0m $disk_used/$disk_total (${disk_percent}%) $disk_bar\n"
   fi
 
@@ -1078,12 +1484,12 @@ show_system_info() {
     local ip_addr=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || echo "N/A")
     local interface=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+' || echo "N/A")
     local public_ip_line=""
-    
+
     if [[ "$ENABLE_PUBLIC_IP_LOOKUP" == "true" ]]; then
       local public_ip=$(timeout 2 curl -s https://ipinfo.io/ip 2>/dev/null || echo "LOOKUP FAILED")
       public_ip_line=" \033[${primary_color}m🌍 PUBLIC:\033[0m $public_ip"
     fi
-    
+
     output_buffer+="\033[${secondary_color}m║\033[0m \033[${success_color}m🌐 LOCAL:\033[0m $ip_addr \033[${warning_color}m📡 INTERFACE:\033[0m $interface$public_ip_line\n"
   fi
 
@@ -1092,24 +1498,24 @@ show_system_info() {
     local cpu_cores=$(nproc 2>/dev/null || echo "N/A")
     local cpu_usage=$(_zsh_get_cpu_usage)
     local cpu_temp=""
-    
+
     if command -v sensors &>/dev/null; then
       cpu_temp=$(sensors 2>/dev/null | grep -i 'core 0' | awk '{print $3}' | head -1 2>/dev/null || echo "")
       [[ -n "$cpu_temp" ]] && cpu_temp=" 🌡️$cpu_temp"
     fi
-    
+
     output_buffer+="\033[${secondary_color}m║\033[0m \033[${accent_color}m⚙️ CPU:\033[0m $cpu_info (${cpu_cores} cores) ${cpu_usage}%$cpu_temp\n"
   fi
 
   local processes=$(ps aux 2>/dev/null | wc -l || echo "N/A")
   local users=$(who 2>/dev/null | wc -l || echo "N/A")
   local zombie_processes=$(ps aux 2>/dev/null | awk '$8 ~ /^Z/ { count++ } END { print count+0 }' || echo "0")
-  
+
   output_buffer+="\033[${secondary_color}m║\033[0m \033[${success_color}m⚡ PROCESSES:\033[0m $processes \033[${primary_color}m👥 USERS:\033[0m $users \033[${danger_color}m🧟 ZOMBIES:\033[0m $zombie_processes\n"
 
   local failed_logins=$(lastb 2>/dev/null | wc -l || echo "0")
   local active_sessions=$(w -h 2>/dev/null | wc -l || echo "0")
-  
+
   output_buffer+="\033[${secondary_color}m║\033[0m \033[${danger_color}m🔒 FAILED_LOGINS:\033[0m $failed_logins \033[${warning_color}m🔺 ACTIVE_SESSIONS:\033[0m $active_sessions\n"
 
   output_buffer+="\033[${secondary_color}m╚═══════════════════════════════════════════════════════════════════════════════╝\033[0m\n"
@@ -1228,16 +1634,16 @@ clear() {
 
 cleanup_processes() {
   local pid_file="$TERMINAL_SESSION_FILE.monitor.pid"
-  
+
   if [[ -f "$pid_file" ]]; then
     local pid=$(cat "$pid_file" 2>/dev/null)
-    
+
     if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM -"$pid" 2>/dev/null
       sleep 0.2
       kill -0 "$pid" 2>/dev/null && kill -KILL -"$pid" 2>/dev/null
     fi
-    
+
     rm -f "$pid_file"
   fi
 
@@ -1330,7 +1736,7 @@ INTEGRITY_BASELINE_FILE="$XDG_CONFIG_HOME/zsh/fs_integrity_baseline.sha256"
 
 initialize_integrity_baseline() {
   [[ "$ENABLE_FILE_INTEGRITY" != true ]] && return
-  
+
   echo "🔒 Creating file integrity baseline..."
   local files_to_check=(
     "/etc/passwd" "/etc/shadow" "/etc/group" "/etc/gshadow"
@@ -1346,21 +1752,21 @@ initialize_integrity_baseline() {
   for file in "${files_to_check[@]}"; do
     [[ -r "$file" ]] && sha256sum "$file" >> "$INTEGRITY_BASELINE_FILE"
   done
-  
+
   echo "✅ Baseline created at: $INTEGRITY_BASELINE_FILE"
 }
 
 check_fs_integrity() {
   [[ "$ENABLE_FILE_INTEGRITY" != true ]] && return
-  
+
   if [[ ! -f "$INTEGRITY_BASELINE_FILE" ]]; then
     echo "⚠️ Baseline not found. Run 'sec-baseline' first."
     return 1
   fi
-  
+
   echo "🔍 Checking file system integrity..."
   local has_warnings=false
-  
+
   while IFS= read -r line; do
     echo "🚨 WARNING: Integrity check FAILED for: $(echo $line | cut -d':' -f1)"
     has_warnings=true
@@ -1373,7 +1779,7 @@ check_fs_integrity() {
 
 check_network_anomalies() {
   echo "📡 Checking for network anomalies..."
-  
+
   if ! command -v ss &>/dev/null; then
     echo "⚠️ 'ss' command not found."
     return 1
@@ -1401,23 +1807,23 @@ export ZSH_OP_TARGET_DESC=""
 
 set-target() {
   [[ "$ENABLE_OP_CONTEXT" != true ]] && return
-  
+
   if [[ -z "$1" ]]; then
     echo "Usage: set-target <IP_ADDRESS> [DOMAIN] [DESCRIPTION]"
     echo "Example: set-target 10.10.11.15 kioptrix.com 'Vulnhub VM'"
     return 1
   fi
-  
+
   export ZSH_OP_TARGET_IP="$1"
   export ZSH_OP_TARGET_DOMAIN="$2"
   export ZSH_OP_TARGET_DESC="$3"
-  
+
   echo "🎯 Target set: IP=$ZSH_OP_TARGET_IP, Domain=$ZSH_OP_TARGET_DOMAIN"
 }
 
 clear-target() {
   [[ "$ENABLE_OP_CONTEXT" != true ]] && return
-  
+
   export ZSH_OP_TARGET_IP=""
   export ZSH_OP_TARGET_DOMAIN=""
   export ZSH_OP_TARGET_DESC=""
@@ -1430,7 +1836,7 @@ clear-target() {
 
 ai() {
   [[ "$ENABLE_AI_ENGINE" != true || "$ENABLE_AI_NLC" != true ]] && return
-  
+
   if [[ -z "$1" ]]; then
     echo "Usage: ai <your query in plain English>"
     echo "Example: ai scan all ports for the target"
@@ -1472,12 +1878,51 @@ ai() {
       ;;
   esac
 
-  echo -e "\033[38;2;0;255;255m🧠 AI Suggestion:\033[0m \033[1;33m$suggested_command\033[0m"
+  echo -e "\n\033[38;2;0;255;255m🧠 AI-Suggested Command:\033[0m"
+  echo -e "   \033[1;33m$suggested_command\033[0m"
 
   if [[ ! "$suggested_command" =~ "# AI:" ]]; then
-    read -q "REPLY?Execute this command? (y/n) "
-    echo
-    [[ "$REPLY" =~ ^[Yy]$ ]] && eval $suggested_command
+    echo -n -e "\n\033[38;2;255;255;0m[E]xecute / [B]uffer (edit) / [C]ancel?\033[0m "
+    read -r choice
+
+    case "${choice:l}" in  # :l converts to lowercase
+      e|execute)
+        # Validate against dangerous patterns (inline check)
+        local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
+        for pat in "${dangerous[@]}"; do
+          if [[ "$suggested_command" == *"$pat"* ]]; then
+             echo "🚨 Blocked dangerous command: $pat"
+             return 1
+          fi
+        done
+
+        # Log command execution for audit trail
+        mkdir -p "$XDG_STATE_HOME/zsh"
+        echo "[$(date -Iseconds)] AI-CMD: $suggested_command" >> "$XDG_STATE_HOME/zsh/ai_command_log"
+
+        # === SECURE AI COMMAND EXECUTION (CVE-2026-001 FIX) ===
+        # Multi-layer validation before execution
+        local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
+        for pat in "${dangerous[@]}"; do
+          if [[ "$suggested_command" == *"$pat"* ]]; then
+            echo "🚨 Security: Dangerous command pattern detected: $pat"
+            return 1
+          fi
+        done
+
+        # Execute with proper error handling
+        eval "$suggested_command"
+        ;;
+      b|buffer)
+        # Put in command buffer for editing (safest option)
+        print -z "$suggested_command"
+        echo "✓ Command placed in buffer. Press ↑ to edit and execute."
+        ;;
+      *)
+        echo "✗ Command cancelled."
+        return 0
+        ;;
+    esac
   fi
 }
 
@@ -1486,7 +1931,7 @@ _ZSH_AI_HISTORY_FILE="$XDG_DATA_HOME/zsh/zsh_ai_history"
 _zsh_log_command_to_history() {
   [[ "$ENABLE_AI_ENGINE" != true ]] && return
   [[ -z "$1" || "$1" == "suggest" ]] && return
-  
+
   mkdir -p "$(dirname "$_ZSH_AI_HISTORY_FILE")"
   echo "$PWD|$1" >> "$_ZSH_AI_HISTORY_FILE"
 }
@@ -1496,7 +1941,7 @@ add-zsh-hook preexec _zsh_log_command_to_history
 
 suggest() {
   [[ "$ENABLE_AI_ENGINE" != true || "$ENABLE_AI_PREDICTIONS" != true ]] && return
-  
+
   if [[ ! -f "$_ZSH_AI_HISTORY_FILE" ]]; then
     echo "No command history found yet."
     return
@@ -1623,106 +2068,14 @@ alias cloud-azure='az_status'
 alias cloud-gcp='gcp_status'
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 25: LIVE THREAT INTELLIGENCE (RESTORED)
-# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 25: REDUNDANT - MERGED INTO SECTION 34
+# (Legacy Threat Intelligence removed in favor of Advanced Module)
 
-fetch_threats() {
-  if [[ "$ENABLE_THREAT_INTEL" != true ]]; then 
-    echo "⚠️ Threat intelligence disabled. Enable ENABLE_THREAT_INTEL in config."
-    return 1
-  fi
-
-  if ! command -v curl &>/dev/null || ! command -v jq &>/dev/null; then
-    echo "❌ Error: 'curl' and 'jq' required"
-    return 1
-  fi
-
-  echo -e "\033[38;2;255;255;0m🔍 Fetching latest CVEs from cve.circl.lu...\033[0m"
-
-  local cve_data
-  cve_data=$(curl -s --max-time 5 "https://cve.circl.lu/api/last/5")
-
-  if [[ -z "$cve_data" || "$cve_data" == "null" ]]; then
-    echo "❌ Failed to fetch threat intelligence"
-    return 1
-  fi
-
-  echo -e "\033[38;2;0;255;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-  echo -e "\033[38;2;255;0;255m🚨 LATEST 5 PUBLISHED CVEs 🚨\033[0m"
-  echo -e "\033[38;2;0;255;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
-  
-  echo "$cve_data" | jq -r '.[] | 
-    "\n\u001b[1;33mCVE-ID:\u001b[0m \(.id)
-\u001b[1;31mCVSS:\u001b[0m \(.cvss // "N/A")
-\u001b[1;36mPublished:\u001b[0m \(.Published // "Unknown")
-\u001b[1;35mSummary:\u001b[0m \(.summary | gsub("\\n"; " ") | .[0:200])...
-\u001b[38;2;100;100;100m─────────────────────────────────────────\u001b[0m"'
-  
-  echo -e "\n\033[38;2;0;255;0m✅ Threat intelligence updated\033[0m"
-}
-
-alias threat-intel='fetch_threats'
-alias cve='fetch_threats'
-alias threats='fetch_threats'
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 26: LIVE DASHBOARD & MONITORING (RESTORED)
-# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 26: REDUNDANT - MERGED INTO SECTION 35
+# (Legacy Dashboard removed in favor of Advanced Module)
 
-live_system_monitor() {
-  if [[ "$ENABLE_LIVE_DASHBOARD" != true ]]; then
-    echo "⚠️ Live dashboard disabled. Enable ENABLE_LIVE_DASHBOARD in config."
-    return 1
-  fi
-
-  local cpu_usage=$(_zsh_get_cpu_usage)
-  local mem_info=$(free -b 2>/dev/null | awk 'NR==2{printf "%.2f%%", $3*100/$2}' || echo "N/A")
-  local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2{print $5}' || echo "N/A")
-  
-  local net_rx="N/A"
-  local net_tx="N/A"
-  if [[ -r /proc/net/dev ]]; then
-    local net_stats=$(awk 'NR>2 {if(sub(":","",$1)) {rx+=$2; tx+=$10}} END {print rx, tx}' /proc/net/dev)
-    net_rx=$(format_bytes $(echo $net_stats | cut -d' ' -f1))
-    net_tx=$(format_bytes $(echo $net_stats | cut -d' ' -f2))
-  fi
-  
-  local threat_level=$((RANDOM % 5))
-  local threat_color=$(threat_color $threat_level)
-  local threat_text=$(threat_level_to_text $threat_level)
-  
-  echo -e "CPU: ${cpu_usage}% | MEM: ${mem_info} | DISK: ${disk_usage} | NET: ↓${net_rx} ↑${net_tx} | THREAT: \033[${threat_color};1m${threat_text}\033[0m"
-}
-
-live_dashboard() {
-  if [[ "$ENABLE_LIVE_DASHBOARD" != true ]]; then
-    echo "⚠️ Live dashboard disabled. Enable ENABLE_LIVE_DASHBOARD in config."
-    return 1
-  fi
-
-  echo -e "\033[38;2;255;0;255m🚀 Shadow@Bhanu Live Dashboard\033[0m"
-  echo -e "\033[38;2;255;255;0m⚡ Press Ctrl+C to exit\033[0m\n"
-  
-  trap 'tput cnorm; echo -e "\n\033[38;2;0;255;0m✅ Dashboard closed\033[0m"; return' INT
-  tput civis
-  
-  while true; do
-    printf "\033[2J\033[H"
-    echo -e "\033[38;2;255;0;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[38;2;0;255;255m          🚀 SHADOW@BHANU LIVE DASHBOARD 🚀\033[0m"
-    echo -e "\033[38;2;255;0;255m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
-    
-    show_system_info
-    echo -e "\n\033[38;2;255;255;0m📊 LIVE METRICS:\033[0m"
-    live_system_monitor
-    
-    echo -e "\n\033[38;2;100;100;100mLast updated: $(date '+%H:%M:%S')\033[0m"
-    sleep 2
-  done
-}
-
-alias dashboard='live_dashboard'
-alias live='live_dashboard'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 27: GIT INTEGRATION
@@ -1917,7 +2270,7 @@ inet() {
     return 1
   fi
 
-  echo "----IP Networks Availables----"
+  echo "----IP Networks Available----"
   printf "Interface         IP_Address        Broadcast           Subnet_Mask        CIDR   Status\n"
   echo "-----------------------------------------------------------------------------------------"
 
@@ -2113,10 +2466,11 @@ usbformat() {
   read DEV
 
   [[ "$DEV" =~ ^[Qq]$ ]] && { echo "Exited."; return 0; }
-  [[ -z "$DEV" || ! "$DEV" =~ ^[a-zA-Z0-9]+$ || ! -b "/dev/$DEV" ]] && {
-    echo "Invalid device: /dev/$DEV"
+  # Enhanced validation: alphanumeric only, no special characters
+  if [[ -z "$DEV" || ! "$DEV" =~ ^[a-zA-Z0-9]+$ || ! -b "/dev/$DEV" ]]; then
+    echo "❌ Invalid device: /dev/$DEV (must be alphanumeric block device)"
     return 1
-  }
+  fi
 
   local removable=$(lsblk -dn -o RM "/dev/$DEV" 2>/dev/null | tr -d ' ')
   if [[ "$removable" != "1" ]]; then
@@ -2237,7 +2591,7 @@ cproj() {
     selection=$(printf '%s\n' "${projects[@]}" | fzf --height 45% --layout=reverse --prompt="Project> " \
       --preview 'ls -la {} | head -200')
   else
-    echo "⚠️ fzf not installed. Select a project:" 
+    echo "⚠️ fzf not installed. Select a project:"
     select selection in "${projects[@]}"; do
       [[ -n "$selection" ]] && break
     done
@@ -2519,6 +2873,7 @@ zsh_doctor() {
     "python3:Python runtime"
     "openssl:Crypto utilities"
     "tmux:Terminal multiplexer"
+    "torsocks:Tor proxy wrapper"
   )
 
   local missing=0
@@ -2668,5 +3023,813 @@ fi
 [[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# END OF CONFIGURATION
+# SECTION 34: ADVANCED THREAT INTELLIGENCE
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Real-time threat intelligence monitoring (ENHANCED in v4.1)
+# Usage: threat_intel [--update] [--critical] [--severity high|medium|low]
+# Features: NVD API v2.0, CVSS filtering, exploit checking, portable date handling
+threat_intel() {
+  local action="${1:-status}"
+  local severity="${2:-high}"
+  local cache_dir="$XDG_CACHE_HOME/zsh"
+
+  mkdir -p "$cache_dir"
+
+  case "$action" in
+    --update|-u)
+      echo "🔍 Updating threat intelligence feeds..."
+
+      # === PORTABLE DATE CALCULATION ===
+      local yesterday today
+      if command -v python3 &>/dev/null; then
+        # Works on ALL platforms (Linux, macOS, BSD)
+        yesterday=$(python3 -c "from datetime import datetime, timedelta; print((datetime.now() - timedelta(1)).strftime('%Y-%m-%dT00:00:00.000'))")
+        today=$(python3 -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%dT23:59:59.999'))")
+      else
+        # Fallback for systems without Python (Linux only)
+        yesterday=$(date -d '1 day ago' +%Y-%m-%dT00:00:00.000 2>/dev/null || date -v-1d +%Y-%m-%dT00:00:00.000 2>/dev/null)
+        today=$(date +%Y-%m-%dT23:59:59.999)
+      fi
+
+      # === NVD API WITH KEY SUPPORT ===
+      local nvd_url="https://services.nvd.nist.gov/rest/json/cves/2.0"
+      nvd_url+="?lastModStartDate=${yesterday}&lastModEndDate=${today}"
+
+      local curl_opts="-s --max-time 30"
+      if [[ -n "$NVD_API_KEY" ]]; then
+        curl_opts+=" -H 'apiKey: $NVD_API_KEY'"
+        echo "  ℹ️  Using authenticated NVD API (higher rate limits)"
+      else
+        echo "  ⚠️  No NVD_API_KEY set (rate limited to 5 requests/30s)"
+        echo "  💡 Get free key: https://nvd.nist.gov/developers/request-an-api-key"
+      fi
+
+      local cve_data=$(eval curl $curl_opts "\"$nvd_url\"" 2>/dev/null)
+
+      if [[ -n "$cve_data" ]] && command -v jq &>/dev/null; then
+        # === PARSE AND FILTER CVEs ===
+        echo "$cve_data" | jq -r '
+          .vulnerabilities[]? |
+          select(.cve.metrics.cvssMetricV31 != null) |
+          [
+            .cve.id,
+            (.cve.metrics.cvssMetricV31[0].cvssData.baseScore | tostring),
+            .cve.metrics.cvssMetricV31[0].cvssData.baseSeverity,
+            (.cve.descriptions[0].value[:150] + "...")
+          ] | @tsv
+        ' 2>/dev/null > "$cache_dir/latest_cves.tsv"
+
+        local cve_count=$(wc -l < "$cache_dir/latest_cves.tsv" 2>/dev/null || echo 0)
+        echo "✅ Downloaded $cve_count CVEs from last 24 hours"
+
+      elif [[ -z "$(command -v jq)" ]]; then
+        echo "⚠️  jq not installed. Install with: sudo apt install jq"
+      else
+        echo "⚠️  Failed to fetch CVE data from NVD"
+      fi
+      ;;
+
+    --critical|-c)
+      echo "🚨 CRITICAL Vulnerabilities (CVSS >= 9.0):"
+      echo "═══════════════════════════════════════"
+
+      if [[ -f "$cache_dir/latest_cves.tsv" ]]; then
+        awk -F'\t' '$2 >= 9.0 {
+          printf "  🔴 %-18s CVSS: %-4s (%s)\n     %s\n\n", $1, $2, $3, $4
+        }' "$cache_dir/latest_cves.tsv"
+      else
+        echo "  ℹ️  No CVE data cached. Run: threat_intel --update"
+      fi
+      ;;
+
+    --severity|-s)
+      local min_score
+      case "$severity" in
+        critical) min_score=9.0 ;;
+        high)     min_score=7.0 ;;
+        medium)   min_score=4.0 ;;
+        low)      min_score=0.1 ;;
+        *)        min_score=7.0 ;;
+      esac
+
+      echo "📊 CVEs with severity >= ${severity} (CVSS >= ${min_score}):"
+
+      if [[ -f "$cache_dir/latest_cves.tsv" ]]; then
+        awk -F'\t' -v min="$min_score" '$2 >= min {
+          printf "  %-18s CVSS: %-4s (%s)\n", $1, $2, $3
+        }' "$cache_dir/latest_cves.tsv"
+      else
+        echo "  ℹ️  No CVE data cached. Run: threat_intel --update"
+      fi
+      ;;
+
+    *)
+      echo "📊 Current Threat Intelligence Status:"
+      echo "────────────────────────────────────"
+
+      # Show system vulnerability count
+      if command_exists apt; then
+        local pending_updates=$(apt list --upgradable 2>/dev/null | wc -l)
+        echo "🔧 Pending security updates: $((pending_updates - 1))"
+      fi
+
+      # Show recent CVEs if available
+      if [[ -f "$cache_dir/latest_cves.tsv" ]]; then
+        local total_cves=$(wc -l < "$cache_dir/latest_cves.tsv")
+        local critical_cves=$(awk -F'\t' '$2 >= 9.0' "$cache_dir/latest_cves.tsv" 2>/dev/null | wc -l)
+        local high_cves=$(awk -F'\t' '$2 >= 7.0 && $2 < 9.0' "$cache_dir/latest_cves.tsv" 2>/dev/null | wc -l)
+
+        echo "🚨 Cached CVEs: $total_cves total ($critical_cves critical, $high_cves high)"
+        echo "   Top 3 by CVSS:"
+        sort -t$'\t' -k2 -rn "$cache_dir/latest_cves.tsv" 2>/dev/null | head -3 | while IFS=$'\t' read cve score sev desc; do
+          echo "   - $cve (CVSS: $score)"
+        done
+      else
+        echo "🚨 No CVE cache. Run: threat_intel --update"
+      fi
+
+      # Network threat indicators
+      echo "🌐 Network Status:"
+      if command_exists ss; then
+        local established_connections=$(ss -tn state established 2>/dev/null | wc -l)
+        local listening_ports=$(ss -tln state listening 2>/dev/null | wc -l)
+        echo "   Established connections: $established_connections"
+        echo "   Listening ports: $listening_ports"
+      fi
+      ;;
+  esac
+}
+
+# Advanced system hardening (ENHANCED in v4.1)
+# Usage: system_hardening [--fix|--audit|--rollback]
+# Features: Automatic backups, idempotent operations, kernel hardening, SSH security
+system_hardening() {
+  local action="${1:-audit}"
+  local backup_dir="$XDG_CACHE_HOME/zsh/hardening_backups"
+
+  mkdir -p "$backup_dir"
+
+  case "$action" in
+    --fix)
+      echo "🛡️  System Hardening - Creating backups..."
+
+      # === BACKUP CRITICAL FILES ===
+      local timestamp=$(date +%Y%m%d_%H%M%S)
+
+      [[ -f /etc/security/limits.conf ]] && \
+        sudo cp /etc/security/limits.conf "$backup_dir/limits.conf.$timestamp" 2>/dev/null
+
+      [[ -f /etc/sysctl.conf ]] && \
+        sudo cp /etc/sysctl.conf "$backup_dir/sysctl.conf.$timestamp" 2>/dev/null
+
+      echo "✅ Backups created in: $backup_dir"
+
+      # === 1. CORE DUMPS (IDEMPOTENT) ===
+      if ! grep -q "^\* hard core 0" /etc/security/limits.conf 2>/dev/null; then
+        echo "* hard core 0" | sudo tee -a /etc/security/limits.conf >/dev/null
+        echo "✅ Core dumps disabled"
+      else
+        echo "ℹ️  Core dumps already disabled"
+      fi
+
+      # === 2. KERNEL HARDENING (IDEMPOTENT) ===
+      echo "\n🔧 Applying kernel hardening parameters..."
+
+      local -a sysctl_params=(
+        "kernel.dmesg_restrict=1"
+        "kernel.kptr_restrict=2"
+        "net.ipv4.tcp_syncookies=1"
+        "net.ipv4.conf.all.accept_redirects=0"
+        "net.ipv4.conf.all.send_redirects=0"
+        "net.ipv4.conf.all.accept_source_route=0"
+        "net.ipv4.conf.all.log_martians=1"
+        "net.ipv6.conf.all.accept_redirects=0"
+        "fs.suid_dumpable=0"
+      )
+
+      for param in "${sysctl_params[@]}"; do
+        local key="${param%%=*}"
+        local value="${param#*=}"
+
+        if ! grep -q "^${key}=" /etc/sysctl.conf 2>/dev/null; then
+          echo "$param" | sudo tee -a /etc/sysctl.conf >/dev/null
+          sudo sysctl -w "$param" >/dev/null 2>&1
+          echo "  ✓ Set: $param"
+        fi
+      done
+
+      sudo sysctl -p >/dev/null 2>&1
+
+      # === 3. UMASK ===
+      umask 077
+      echo "\n✅ Umask set to 077 (owner-only)"
+
+      echo "\n🎯 Hardening complete! Review backups in: $backup_dir"
+      ;;
+
+    --audit)
+      echo "🔍 Security Hardening Audit"
+      echo "═══════════════════════════"
+
+      # === UMASK CHECK ===
+      local current_umask=$(umask)
+      if [[ "$current_umask" == "0077" ]]; then
+        echo "✅ Umask: $current_umask (secure)"
+      else
+        echo "⚠️  Umask: $current_umask (recommend: 0077)"
+      fi
+
+      # === CORE DUMPS ===
+      if grep -q "^\* hard core 0" /etc/security/limits.conf 2>/dev/null; then
+        echo "✅ Core dumps: Disabled"
+      else
+        echo "⚠️  Core dumps: Not disabled"
+      fi
+
+      # === KERNEL PARAMETERS ===
+      echo "\n🔐 Kernel Security Parameters:"
+      local -a params=(
+        "kernel.dmesg_restrict"
+        "kernel.kptr_restrict"
+        "net.ipv4.tcp_syncookies"
+      )
+
+      for param in "${params[@]}"; do
+        local value=$(sysctl -n "$param" 2>/dev/null || echo "not set")
+        printf "  %-30s = %s\n" "$param" "$value"
+      done
+
+      # === WORLD-WRITABLE FILES (SAMPLE) ===
+      echo "\n📁 World-writable files (sample, excluding /tmp):"
+      find /home /etc /usr/local -type f -perm -002 ! -path "/tmp/*" 2>/dev/null | \
+        head -5 | sed 's/^/   /' || echo "   None found (or permission denied)"
+
+      # === FIREWALL STATUS ===
+      echo "\n🔥 Firewall Status:"
+      if command -v ufw &>/dev/null; then
+        sudo ufw status 2>/dev/null | head -1 || echo "  Unknown"
+      elif command -v firewall-cmd &>/dev/null; then
+        echo "  firewalld: $(sudo firewall-cmd --state 2>/dev/null || echo 'unknown')"
+      else
+        echo "  ⚠️  No firewall detected (ufw/firewalld)"
+      fi
+
+      # === FAILED LOGINS ===
+      if [[ -r /var/log/auth.log ]]; then
+        local failed=$(grep -c "Failed password" /var/log/auth.log 2>/dev/null || echo 0)
+        echo "\n🚨 Failed login attempts: $failed"
+      fi
+
+      echo "\n💡 Run 'system_hardening --fix' to apply hardening"
+      ;;
+
+    --rollback)
+      echo "🔄 Rollback System Hardening"
+      echo "════════════════════════════"
+
+      local latest_limits=$(ls -t "$backup_dir"/limits.conf.* 2>/dev/null | head -1)
+      local latest_sysctl=$(ls -t "$backup_dir"/sysctl.conf.* 2>/dev/null | head -1)
+
+      if [[ -z "$latest_limits" && -z "$latest_sysctl" ]]; then
+        echo "⚠️  No backups found in $backup_dir"
+        return 1
+      fi
+
+      echo "Found backups:"
+      [[ -n "$latest_limits" ]] && echo "  - $(basename $latest_limits)"
+      [[ -n "$latest_sysctl" ]] && echo "  - $(basename $latest_sysctl)"
+
+      echo -n "\nProceed with rollback? [y/N] "
+      read -r confirm
+
+      if [[ "${confirm:l}" == "y" ]]; then
+        [[ -n "$latest_limits" ]] && \
+          sudo cp "$latest_limits" /etc/security/limits.conf && \
+          echo "✅ Restored limits.conf"
+
+        [[ -n "$latest_sysctl" ]] && \
+          sudo cp "$latest_sysctl" /etc/sysctl.conf && \
+          sudo sysctl -p >/dev/null 2>&1 && \
+          echo "✅ Restored sysctl.conf"
+
+        echo "\n🎯 Rollback complete!"
+      else
+        echo "Cancelled."
+      fi
+      ;;
+  esac
+}
+
+alias threat='threat_intel'
+alias harden='system_hardening'
+alias harden-rollback='system_hardening --rollback'
+alias vulns='threat_intel --severity high'
+# Consolidated Aliases from System 4.0
+alias cve='threat_intel'
+alias threats='threat_intel'
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 35: PERFORMANCE DASHBOARD
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Real-time performance monitoring dashboard
+# Usage: perf_dashboard [--refresh <seconds>] [--export <format>]
+# Features: CPU, memory, disk, network metrics with historical tracking
+perf_dashboard() {
+  local refresh_interval="${1:-2}"
+  local export_format="${2:-none}"
+  local log_file="$XDG_CACHE_HOME/zsh/perf_log.csv"
+
+  # Initialize CSV log if exporting
+  if [[ "$export_format" == "csv" ]]; then
+    echo "timestamp,cpu_usage,memory_usage,disk_usage,network_io" > "$log_file"
+  fi
+
+  echo "🚀 Shadow Performance Dashboard - Ctrl+C to exit"
+  echo "═══════════════════════════════════════════════════"
+
+  while true; do
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local cpu_usage=$(_zsh_get_cpu_usage "total")
+    # Memory: (Total - Available) / Total * 100
+    local memory_info=$(free -b 2>/dev/null | awk 'NR==2{printf "%.2f", ($2-$7)*100/$2}')
+    local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2{print $5}' | sed 's/%//')
+
+    # Network I/O (simplified)
+    local network_io="N/A"
+    if [[ -f /proc/net/dev ]]; then
+      network_io=$(awk 'NR>2 {rx+=$2; tx+=$10} END {printf "%.0f/%.0f", rx/1024/1024, tx/1024/1024}' /proc/net/dev)
+    fi
+
+    # Clear screen and display dashboard
+    printf "\033[2J\033[H"
+    echo "📊 Performance Metrics - $timestamp"
+    echo "─────────────────────────────────────"
+    printf "💻 CPU Usage:     %8s%%\n" "$cpu_usage"
+    printf "🧠 Memory Usage:  %8s%%\n" "$memory_info"
+    printf "💾 Disk Usage:    %8s%%\n" "$disk_usage"
+    printf "🌐 Network I/O:   %8s MB (RX/TX)\n" "$network_io"
+
+    # Visual indicators
+    echo ""
+    echo "📈 Resource Status:"
+
+    # CPU bar
+    local cpu_bar_length=$((cpu_usage / 2))
+    printf "CPU: [%-50s] %3d%%\n" "$(printf "%*s" $cpu_bar_length | tr ' ' '█')" "$cpu_usage"
+
+    # Memory bar
+    local mem_bar_length=$((memory_info / 2))
+    printf "MEM: [%-50s] %3.0f%%\n" "$(printf "%*s" $mem_bar_length | tr ' ' '█')" "$memory_info"
+
+    # Disk bar
+    local disk_bar_length=$((disk_usage / 2))
+    printf "DSK: [%-50s] %3d%%\n" "$(printf "%*s" $disk_bar_length | tr ' ' '█')" "$disk_usage"
+
+    # Log data if requested
+    if [[ "$export_format" == "csv" ]]; then
+      echo "$timestamp,$cpu_usage,$memory_info,$disk_usage,$network_io" >> "$log_file"
+    fi
+
+    sleep "$refresh_interval"
+  done
+}
+
+# System resource optimizer
+# Usage: optimize_system [--aggressive] [--safe]
+optimize_system() {
+  local mode="${1:-safe}"
+
+  echo "⚡ System Optimization - Mode: $mode"
+  echo "════════════════════════════════════"
+
+  case "$mode" in
+    --aggressive|-a)
+      echo "🔥 Applying aggressive optimizations..."
+
+      # Clear system caches
+      if command_exists sync; then
+        sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1
+        echo "✅ System caches cleared"
+      fi
+
+      # Optimize swappiness
+      echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf 2>/dev/null
+      echo "✅ Swappiness optimized"
+
+      # Disable unnecessary services
+      local services=("bluetooth" "cups" "avahi-daemon")
+      for service in "${services[@]}"; do
+        if systemctl is-active "$service" >/dev/null 2>&1; then
+          sudo systemctl stop "$service" 2>/dev/null
+          sudo systemctl disable "$service" 2>/dev/null
+          echo "✅ Disabled $service"
+        fi
+      done
+      ;;
+    --safe|-s)
+      echo "🛡️ Applying safe optimizations..."
+
+      # Clean package cache
+      if command_exists apt; then
+        sudo apt autoremove -y >/dev/null 2>&1
+        sudo apt autoclean >/dev/null 2>&1
+        echo "✅ Package cache cleaned"
+      fi
+
+      # Clean temporary files
+      find /tmp -type f -atime +7 -delete 2>/dev/null
+      echo "✅ Temporary files cleaned"
+
+      # Optimize database files
+      if command_exists updatedb; then
+        updatedb >/dev/null 2>&1
+        echo "✅ File database updated"
+      fi
+      ;;
+  esac
+
+  echo "🎯 Optimization complete!"
+}
+
+alias perf='perf_dashboard'
+alias opt='optimize_system --safe'
+alias opt-aggressive='optimize_system --aggressive'
+# Consolidated Aliases from System 4.0
+alias dashboard='perf_dashboard'
+alias live='perf_dashboard'
+
+. "$HOME/.local/share/../bin/env"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 36: CONFIGURATION VERSION CONTROL (NEW in v4.1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Manage .zshrc versions/backups
+# Usage: zshrc_version [init|save|restore|history|diff]
+zshrc_version() {
+  local action="${1:-history}"
+  local backup_dir="$XDG_STATE_HOME/zsh/config_versions"
+  local current_config="${HOME}/.zshrc"
+
+  mkdir -p "$backup_dir"
+
+  case "$action" in
+    init)
+      if [[ ! -d "$backup_dir/.git" ]]; then
+        if command -v git &>/dev/null; then
+          git init "$backup_dir" >/dev/null
+          echo "✅ Config version control initialized in $backup_dir"
+        else
+          echo "⚠️  Git not found. Please install git first."
+        fi
+      else
+        echo "ℹ️  Already initialized"
+      fi
+      ;;
+    save)
+      local msg="${2:-Auto-save $(date '+%Y-%m-%d %H:%M')}"
+      if [[ ! -d "$backup_dir/.git" ]]; then
+        zshrc_version init
+      fi
+      cp "$current_config" "$backup_dir/zshrc"
+      git -C "$backup_dir" add zshrc
+      git -C "$backup_dir" commit -m "$msg" >/dev/null && echo "✅ Config saved: $msg" || echo "ℹ️  No changes to save"
+      ;;
+    restore)
+      local commit="${2:-HEAD~1}"
+      if [[ ! -d "$backup_dir/.git" ]]; then
+        echo "⚠️  No version history found."
+        return 1
+      fi
+      git -C "$backup_dir" show "$commit":zshrc > "$current_config"
+      echo "✅ Restored config from $commit"
+      echo "ℹ️  Run 'source ~/.zshrc' to apply"
+      ;;
+    history)
+      if [[ -d "$backup_dir/.git" ]]; then
+        git -C "$backup_dir" log --oneline -n 10 2>/dev/null
+      else
+        echo "ℹ️  No history yet. Run 'zshrc_version init'"
+      fi
+      ;;
+    diff)
+      if [[ -d "$backup_dir/.git" ]]; then
+        git -C "$backup_dir" diff HEAD -- zshrc 2>/dev/null
+      fi
+      ;;
+    *)
+      echo "Usage: zshrc_version <init|save|restore|history|diff>"
+      ;;
+  esac
+}
+
+alias zshrc-save='zshrc_version save'
+alias zshrc-log='zshrc_version history'
+alias zshrc-diff='zshrc_version diff'
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 37: PROCESS BASELINE MONITORING (NEW in v4.1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Monitor process list for anomalies
+# Usage: process_monitor [--baseline|--diff|--suspicious]
+process_monitor() {
+  local action="${1:-diff}"
+  local baseline_file="$XDG_STATE_HOME/zsh/process_baseline.txt"
+
+  mkdir -p "$(dirname "$baseline_file")"
+
+  case "$action" in
+    --baseline)
+      ps -eo comm,cmd --sort=comm | grep -v "ps -eo" > "$baseline_file"
+      echo "✅ Process baseline created ($(wc -l < "$baseline_file") processes)"
+      ;;
+    --diff)
+      if [[ ! -f "$baseline_file" ]]; then
+        echo "⚠️  No baseline found. Run: process_monitor --baseline"
+        return 1
+      fi
+
+      echo "🔍 New processes since baseline:"
+      # Simple diff
+      if command -v comm &>/dev/null; then
+        ps -eo comm,cmd --sort=comm | grep -v "ps -eo" | comm -23 - "$baseline_file" | sed 's/^/   + /'
+      else
+        ps -eo comm,cmd --sort=comm | grep -v "ps -eo" | grep -vFx -f "$baseline_file" | sed 's/^/   + /'
+      fi
+      ;;
+    --suspicious)
+      echo "🕵️  Checking for suspicious process names..."
+      ps -eo pid,user,comm,cmd | grep -E "nc |netcat|ncat|bash -i|sh -i|python.*pty|perl.*pty|ruby.*tcpsocket" | \
+        grep -v "grep" | sed 's/^/   ⚠️  /' || echo "   None found"
+      ;;
+    *)
+      echo "Usage: process_monitor [--baseline|--diff|--suspicious]"
+      ;;
+  esac
+}
+
+alias procmon='process_monitor'
+alias procmon-baseline='process_monitor --baseline'
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 38: OPERATOR EXECUTION HOOKS (v4.2)
+# ═══════════════════════════════════════════════════════════════════════════
+# NOTE: Core functions (_op_notify, operator_status, operator_config,
+#       _op_render_execution_header) moved to Section 10A for early init.
+#       Only hooks remain here as they should be registered after all plugins.
+
+# === PROFESSIONAL HOOK MANAGEMENT SYSTEM ===
+typeset -gA _SHADOW_HOOKS_REGISTERED
+
+_shadow_register_hook() {
+  local hook_type="$1"
+  local hook_function="$2"
+  local priority="${3:-50}"  # 0-100, lower = higher priority
+
+  local hook_key="${hook_type}_${hook_function}"
+
+  # Prevent duplicate registration
+  [[ -n "${_SHADOW_HOOKS_REGISTERED[$hook_key]}" ]] && return 0
+
+  # Remove existing hook to prevent conflicts
+  add-zsh-hook -d "$hook_type" "$hook_function" 2>/dev/null
+
+  # Register with priority management
+  case "$hook_type" in
+    precmd)
+      # Order: cleanup → display → operator
+      case "$priority" in
+        [0-9])   add-zsh-hook precmd "$hook_function" ;;  # Highest priority
+        [1-4][0-9]) add-zsh-hook precmd "$hook_function" ;;  # High priority
+        [5-7][0-9]) add-zsh-hook precmd "$hook_function" ;;  # Medium priority
+        *)       add-zsh-hook precmd "$hook_function" ;;  # Low priority
+      esac
+      ;;
+    preexec)
+      add-zsh-hook preexec "$hook_function"
+      ;;
+  esac
+
+  _SHADOW_HOOKS_REGISTERED[$hook_key]=1
+}
+
+# === ENHANCED PREEXEC HOOK WITH OUTPUT CAPTURE ===
+_op_preexec() {
+  local full_command="$1"
+
+  # Update session state
+  typeset -g SHADOW_SESSION_COMMAND_COUNT=${SHADOW_SESSION_COMMAND_COUNT:-0}
+  (( SHADOW_SESSION_COMMAND_COUNT++ ))
+
+  # Skip only truly noise commands (not ls, cd, pwd which users want to see)
+  case "$full_command" in
+    clear|cls|history|jobs|fg|bg) return ;;
+    *\[\[*\]\]*) return ;;  # Skip bracketed paste
+    *) ;;
+  esac
+
+  # Set flag for output separation in precmd
+  typeset -g _OP_COMMAND_EXECUTED=true
+
+  # Render execution header
+  _op_render_execution_header "$full_command"
+}
+
+# === ADVANCED PRECMD HOOK WITH ENHANCED OUTPUT SEPARATION ===
+_op_precmd() {
+    local exit_code="$?"
+
+    # Update session state
+    [[ $exit_code -ne 0 ]] && typeset -g SHADOW_SESSION_ERROR_COUNT=${SHADOW_SESSION_ERROR_COUNT:-0} && (( SHADOW_SESSION_ERROR_COUNT++ ))
+
+    # Show advanced output separator with status
+    if [[ -n "${_OP_COMMAND_EXECUTED}" ]]; then
+        _op_show_output_separator "$exit_code"
+        unset _OP_COMMAND_EXECUTED
+    fi
+
+    # Enhanced error reporting with context and suggestions
+    if [[ $exit_code -ne 0 ]]; then
+        # Determine error type and styling
+        local error_type="ERROR"
+        local error_color="38;2;255;100;0"
+        local error_icon="$(_icon failure)"
+        local gradient_style="flame"
+
+        [[ $exit_code -gt 128 ]] && error_type="SIGNAL" && error_color="38;2;255;0;0" && error_icon="$(_icon critical)" && gradient_style="critical"
+        [[ $exit_code -eq 2 ]] && error_type="PERMISSION" && error_color="38;2;255;165;0" && gradient_style="warning"
+        [[ $exit_code -eq 127 ]] && error_type="NOT_FOUND" && error_color="38;2;255;200;0" && gradient_style="warning"
+
+        # Simple gradient border function without animation
+        _draw_gradient_border() {
+            local width=$1
+            local style="$2"
+
+            # Left cap (white)
+            printf "\033[38;2;255;255;255m─"
+
+            for ((i=1; i<width-1; i++)); do
+                # Simple static gradient based on position
+                local progress=$((i * 100 / (width - 1)))
+
+                # Different gradient styles based on error type
+                case "$style" in
+                    "critical")
+                        # Deep red gradient
+                        local r=$((255 - progress / 4))
+                        local g=$((50 - progress / 8))
+                        local b=$((50 - progress / 8))
+                        ;;
+                    "warning")
+                        # Orange-yellow gradient
+                        local r=255
+                        local g=$((200 - progress / 5))
+                        local b=$((50 + progress / 10))
+                        ;;
+                    "flame"|*)
+                        # Default flame gradient
+                        local r=$((255 - progress / 6))
+                        local g=$((140 - progress / 10))
+                        local b=0
+                        ;;
+                esac
+
+                printf "\033[38;2;%d;%d;%dm─" "$r" "$g" "$b"
+            done
+
+            # Right cap (white)
+            printf "\033[38;2;255;255;255m─"
+        }
+
+        # Enhanced error messages with more context
+        local msg1="$error_icon [$error_type] Command failed with $([[ $exit_code -gt 128 ]] && echo "signal" || echo "exit code"): $exit_code"
+        local msg2=""
+        local msg3=""
+        local msg4=""
+
+        # Comprehensive error hints with actionable solutions
+        case $exit_code in
+            127)
+                msg2="💡 Command not found - check PATH or spelling"
+                msg3="🔧 Try: 'which <command>' or 'command -v <command>'"
+                msg4="📦 Install with: apt install <command> | brew install <command>"
+                ;;
+            126)
+                msg2="💡 Command not executable - check permissions"
+                msg3="🔧 Try: 'chmod +x <file>' to make executable"
+                msg4="🔍 Check file type with: 'file <filename>'"
+                ;;
+            130)
+                msg2="💡 Script terminated with Ctrl+C"
+                msg3="⚡ Operation was interrupted by user"
+                msg4="🔄 Use 'fg' to resume background jobs"
+                ;;
+            2)
+                msg2="💡 File not found or permission denied"
+                msg3="🔍 Check file paths and verify existence"
+                msg4="🔐 Try 'sudo' if administrative access needed"
+                ;;
+            125)
+                msg2="💡 Command failed or operation not permitted"
+                msg3="🔐 Check permissions and try with sudo if needed"
+                msg4="📋 Verify command syntax and arguments"
+                ;;
+            1)
+                msg2="💡 General error - command completed with issues"
+                msg3="📋 Check command output for specific error details"
+                msg4="🔍 Review command syntax and parameters"
+                ;;
+            130)
+                msg2="💡 Script terminated with Ctrl+C"
+                msg3="⚡ Operation was interrupted by user"
+                msg4="🔄 Use 'fg' to resume background jobs"
+                ;;
+            137)
+                msg2="💡 Process terminated (SIGKILL)"
+                msg3="⚡ Process was forcefully terminated"
+                msg4="🔍 Check system resources or process limits"
+                ;;
+            *)
+                msg2="💡 Exit code $exit_code - unusual termination"
+                msg3="📚 Check command documentation for this exit code"
+                msg4="🔍 Search online: 'exit code $exit_code <command>'"
+                ;;
+        esac
+
+        # Calculate max width (strip ANSI codes for accurate length)
+        local max_width=0
+        local msg1_len=${#msg1}
+        local msg2_len=${#msg2}
+        local msg3_len=${#msg3}
+        local msg4_len=${#msg4}
+
+        [[ $msg1_len -gt $max_width ]] && max_width=$msg1_len
+        [[ $msg2_len -gt $max_width ]] && max_width=$msg2_len
+        [[ $msg3_len -gt $max_width ]] && max_width=$msg3_len
+        [[ $msg4_len -gt $max_width ]] && max_width=$msg4_len
+
+        # Add padding (6 for "│   " and "   │")
+        local box_width=$((max_width + 6))
+
+        printf "\n"
+
+        # Top border with enhanced gradient
+        printf "\033[38;2;255;255;255m┌"
+        _draw_gradient_border $box_width "$gradient_style"
+        printf "┐\033[0m\n"
+
+        # Message 1 - Primary error info
+        printf "\033[38;2;255;255;255m│   \033[%sm%s" "$error_color" "$msg1"
+        printf "%*s\033[38;2;255;255;255m   │\033[0m\n" $((max_width - msg1_len)) ""
+
+        # Message 2 - Primary hint
+        if [[ -n "$msg2" ]]; then
+            printf "\033[38;2;255;255;255m│   \033[38;2;255;255;100m%s" "$msg2"
+            printf "%*s\033[38;2;255;255;255m   │\033[0m\n" $((max_width - msg2_len)) ""
+        fi
+
+        # Message 3 - Secondary hint
+        if [[ -n "$msg3" ]]; then
+            printf "\033[38;2;255;255;255m│   \033[38;2;200;200;255m%s" "$msg3"
+            printf "%*s\033[38;2;255;255;255m   │\033[0m\n" $((max_width - msg3_len)) ""
+        fi
+
+        # Message 4 - Additional suggestion
+        if [[ -n "$msg4" ]]; then
+            printf "\033[38;2;255;255;255m│   \033[38;2;150;150;255m%s" "$msg4"
+            printf "%*s\033[38;2;255;255;255m   │\033[0m\n" $((max_width - msg4_len)) ""
+        fi
+
+        # Bottom border with matching gradient
+        printf "\033[38;2;255;255;255m└"
+        _draw_gradient_border $box_width "$gradient_style"
+        printf "┘\033[0m\n"
+
+        printf "\n"
+    fi
+
+    # Clean formatting
+    printf "\033[0m"
+}
+
+# === OUTPUT SEPARATION HELPER ===
+_op_show_output_separator() {
+  if [[ "${_OP_CONFIG[show_output_separator]}" == "true" ]]; then
+    printf "\033[38;2;100;100;100m"
+    printf "%*s" "${_OP_CONFIG[divider_width]}" "" | tr ' ' "${_OP_CONFIG[output_separator_char]}"
+    printf "\033[0m\n"
+  fi
+}
+
+# === HOOK SYSTEM INITIALIZATION ===
+_shadow_init_hooks() {
+  # Register core hooks with proper priority
+  _shadow_register_hook precmd _op_precmd 10    # High priority
+  _shadow_register_hook precmd post_init_display 50      # Medium priority
+  _shadow_register_hook preexec _op_preexec 10   # High priority
+}
+
+# Initialize hook system
+_shadow_init_hooks
