@@ -618,40 +618,352 @@ operator_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 11: CORE UTILITY FUNCTIONS
+# SECTION 10B: SECURITY AUDIT LOGGING SYSTEM
 # ═══════════════════════════════════════════════════════════════════════════
+
+typeset -g SECURITY_AUDIT_LOG="$XDG_STATE_HOME/zsh/security_audit.log"
+typeset -g COMMAND_AUDIT_LOG="$XDG_STATE_HOME/zsh/command_audit.log"
+
+# Initialize audit logs
+_init_audit_logs() {
+  mkdir -p "$XDG_STATE_HOME/zsh"
+
+  for log in "$SECURITY_AUDIT_LOG" "$COMMAND_AUDIT_LOG"; do
+    if [[ ! -f "$log" ]]; then
+      touch "$log"
+      chmod 600 "$log"
+      {
+        echo "# Shadow Terminal Security Audit Log"
+        echo "# Created: $(date -Iseconds)"
+        echo "# User: $(whoami)"
+        echo "# Host: $(hostname)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+      } >> "$log"
+    fi
+  done
+}
+
+# Security event logger
+_log_security_event() {
+  local event_type="$1"
+  local severity="$2"
+  local message="$3"
+  local details="${4:-}"
+
+  local log_entry
+  log_entry=$(cat <<EOF
+[$(date -Iseconds)] SECURITY_EVENT
+Type: $event_type
+Severity: $severity
+User: $(whoami)
+PID: $$
+PPID: $PPID
+PWD: $PWD
+Message: $message
+Details: $details
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EOF
+)
+
+  echo "$log_entry" >> "$SECURITY_AUDIT_LOG"
+
+  # Alert on critical events
+  if [[ "$severity" == "CRITICAL" ]]; then
+    _op_notify "critical" "🚨 SECURITY: $message"
+  fi
+}
+
+# Command audit logger
+_log_command_execution() {
+  local command="$1"
+  local exit_code="${2:-0}"
+
+  {
+    echo "[$(date -Iseconds)] CMD_EXEC"
+    echo "User: $(whoami)"
+    echo "PWD: $PWD"
+    echo "Command: $command"
+    echo "Exit: $exit_code"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+  } >> "$COMMAND_AUDIT_LOG"
+}
+
+# Initialize on load
+_init_audit_logs
+
+# Log rotation function
+rotate_audit_logs() {
+  local max_size=$((10 * 1024 * 1024))  # 10MB
+
+  for log in "$SECURITY_AUDIT_LOG" "$COMMAND_AUDIT_LOG"; do
+    if [[ -f "$log" ]] && [[ $(stat -f%z "$log" 2>/dev/null || stat -c%s "$log" 2>/dev/null) -gt $max_size ]]; then
+      local archive="${log}.$(date +%Y%m%d_%H%M%S).gz"
+      gzip -c "$log" > "$archive"
+      > "$log"  # Truncate
+      echo "📦 Rotated: $archive"
+    fi
+  done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10C: RATE LIMITING SYSTEM
+# ═══════════════════════════════════════════════════════════════════════════
+
+typeset -gA _RATE_LIMIT_COUNTERS
+typeset -gA _RATE_LIMIT_WINDOWS
+
+# Check rate limit for function
+# Usage: _check_rate_limit "function_name" max_calls window_seconds
+_check_rate_limit() {
+  local func_name="$1"
+  local max_calls="${2:-10}"
+  local window="${3:-60}"
+
+  local current_time=$(date +%s)
+  local counter_key="${func_name}_counter"
+  local window_key="${func_name}_window_start"
+
+  # Initialize if first call
+  if [[ -z "${_RATE_LIMIT_WINDOWS[$window_key]}" ]]; then
+    _RATE_LIMIT_WINDOWS[$window_key]=$current_time
+    _RATE_LIMIT_COUNTERS[$counter_key]=0
+  fi
+
+  # Check if window expired
+  local window_start=${_RATE_LIMIT_WINDOWS[$window_key]}
+  local elapsed=$((current_time - window_start))
+
+  if [[ $elapsed -ge $window ]]; then
+    # Reset window
+    _RATE_LIMIT_WINDOWS[$window_key]=$current_time
+    _RATE_LIMIT_COUNTERS[$counter_key]=0
+  fi
+
+  # Check limit
+  local current_count=${_RATE_LIMIT_COUNTERS[$counter_key]}
+
+  if [[ $current_count -ge $max_calls ]]; then
+    local remaining=$((window - elapsed))
+    echo "🚨 Rate limit exceeded for $func_name"
+    echo "   Limit: $max_calls calls per $window seconds"
+    echo "   Wait: $remaining seconds"
+    _log_security_event "RATE_LIMIT" "WARNING" "Rate limit hit: $func_name" "Count: $current_count, Window: $window"
+    return 1
+  fi
+
+  # Increment counter
+  _RATE_LIMIT_COUNTERS[$counter_key]=$((current_count + 1))
+  return 0
+}
+
+# Apply rate limiting to sensitive functions
+_apply_rate_limits() {
+  # These will be applied in the actual functions
+  :
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10D: INPUT VALIDATION FRAMEWORK
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Validate string input
+# Usage: _validate_string "input" "pattern" "max_length"
+_validate_string() {
+  local input="$1"
+  local pattern="${2:-^[a-zA-Z0-9_.-]+$}"
+  local max_length="${3:-256}"
+
+  # Length check
+  if [[ ${#input} -gt $max_length ]]; then
+    echo "❌ Input too long (max: $max_length)"
+    return 1
+  fi
+
+  # Pattern match
+  if [[ ! "$input" =~ $pattern ]]; then
+    echo "❌ Invalid characters in input"
+    return 1
+  fi
+
+  return 0
+}
+
+# Validate numeric input
+_validate_number() {
+  local input="$1"
+  local min="${2:-0}"
+  local max="${3:-2147483647}"
+
+  if ! [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "❌ Not a valid number: $input"
+    return 1
+  fi
+
+  if [[ $input -lt $min ]] || [[ $input -gt $max ]]; then
+    echo "❌ Number out of range ($min-$max): $input"
+    return 1
+  fi
+
+  return 0
+}
+
+# Validate file path
+_validate_path() {
+  local path="$1"
+  local must_exist="${2:-false}"
+
+  # Check for path traversal
+  if [[ "$path" == *".."* ]]; then
+    echo "❌ Path traversal detected"
+    _log_security_event "PATH_TRAVERSAL" "CRITICAL" "Attempt: $path"
+    return 1
+  fi
+
+  # Check for absolute paths if not allowed
+  if [[ "$path" == /* ]] && [[ "${3:-false}" != "allow_absolute" ]]; then
+    echo "❌ Absolute paths not allowed"
+    return 1
+  fi
+
+  # Check existence if required
+  if [[ "$must_exist" == "true" ]] && [[ ! -e "$path" ]]; then
+    echo "❌ Path does not exist: $path"
+    return 1
+  fi
+
+  return 0
+}
+
+# Validate URL
+_validate_url() {
+  local url="$1"
+  local require_https="${2:-false}"
+
+  # Basic URL format check
+  if [[ ! "$url" =~ ^https?:// ]]; then
+    echo "❌ Invalid URL format"
+    return 1
+  fi
+
+  # HTTPS requirement
+  if [[ "$require_https" == "true" ]] && [[ ! "$url" =~ ^https:// ]]; then
+    echo "❌ HTTPS required"
+    return 1
+  fi
+
+  # Block internal IPs (SSRF protection)
+  if [[ "$url" =~ (127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|::1|localhost) ]]; then
+    echo "❌ Internal/private IP addresses blocked"
+    _log_security_event "SSRF_ATTEMPT" "CRITICAL" "Blocked URL: $url"
+    return 1
+  fi
+
+  return 0
+}
+
+# Sanitize user input for safe display
+_sanitize_output() {
+  local input="$1"
+  # Remove ANSI escape sequences
+  echo "$input" | sed 's/\x1b\[[0-9;]*m//g'
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 11: CORE UTILITY FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
 # Secure sudo wrapper with validation
 # Usage: secure_sudo "<command>"
 # Security: Validates command against whitelist before execution
 # Returns: Exit code of executed command or 1 for security violation
 secure_sudo() {
+  if [[ -z "$1" ]]; then
+    echo "Usage: secure_sudo \"<command>\""
+    return 1
+  fi
+
   local cmd="$1"
-  local allowed_commands=(
-    "shutdown" "systemctl" "modprobe" "umount" "wipefs"
-    "mkfs.vfat" "mkfs.exfat" "mkfs.ntfs" "mkfs.ext4" "dmidecode"
+
+  # Enhanced whitelist - add more commands as needed
+  local -a allowed_commands=(
+    "shutdown" "reboot" "systemctl" "modprobe" "umount"
+    "wipefs" "mkfs.vfat" "mkfs.exfat" "mkfs.ntfs" "mkfs.ext4"
+    "dmidecode" "lsblk" "fdisk" "parted"
+    "apt" "apt-get" "dpkg" "dnf" "yum"
+    "ufw" "iptables" "firewall-cmd"
   )
 
-  # === OPERATOR ELEVATION NOTIFICATION ===
-  _op_notify "elevated" "🔑 Sudo access requested for: $cmd"
+  # Parse command into array
+  local -a cmd_array
+  read -rA cmd_array <<< "$cmd"
 
-  # Validate command is in allowed list
-  local base_cmd="${cmd%% *}"
-  for allowed in "${allowed_commands[@]}"; do
-    if [[ "$base_cmd" == "$allowed" ]]; then
-      sudo $cmd
-      local exit_code=$?
-      if [[ $exit_code -eq 0 ]]; then
-        _op_notify "success" "Privileged command completed"
-      else
-        _op_notify "failure" "Privileged command failed (exit code: $exit_code)"
-      fi
-      return $exit_code
+  if [[ ${#cmd_array[@]} -eq 0 ]]; then
+    _op_notify "failure" "Empty command"
+    return 1
+  fi
+
+  local base_cmd="${cmd_array[1]}"
+
+  # === CRITICAL SECURITY CHECKS ===
+
+  # 1. Validate base command is whitelisted
+  local allowed=false
+  for allowed_cmd in "${allowed_commands[@]}"; do
+    if [[ "$base_cmd" == "$allowed_cmd" ]]; then
+      allowed=true
+      break
     fi
   done
 
-  _op_notify "failure" "🚨 Security: Command '$base_cmd' not in sudo whitelist"
-  return 1
+  if ! $allowed; then
+    _op_notify "failure" "🚨 Command '$base_cmd' not in sudo whitelist"
+    echo "Allowed commands: ${allowed_commands[*]}"
+    return 1
+  fi
+
+  # 2. Check for dangerous characters in all arguments
+  local arg
+  for arg in "${cmd_array[@]}"; do
+    # Check for shell metacharacters that could enable command injection
+    if [[ "$arg" =~ [\;] ]] || \
+       [[ "$arg" =~ [\|] ]] || \
+       [[ "$arg" =~ [\&] ]] || \
+       [[ "$arg" =~ [\`] ]] || \
+       [[ "$arg" =~ [\$] ]] || \
+       [[ "$arg" =~ [\(] ]] || \
+       [[ "$arg" =~ [\)] ]] || \
+       [[ "$arg" =~ [\<] ]] || \
+       [[ "$arg" =~ [\>] ]]; then
+        _op_notify "failure" "🚨 Dangerous character detected in: $arg"
+        return 1
+    fi
+  done
+
+  # 3. Prevent path traversal
+  for arg in "${cmd_array[@]}"; do
+    if [[ "$arg" == *".."* ]]; then
+      _op_notify "failure" "🚨 Path traversal detected: $arg"
+      return 1
+    fi
+  done
+
+  # === EXECUTION ===
+  _op_notify "elevated" "🔑 Requesting sudo for: ${cmd_array[*]}"
+
+  # Execute with proper quoting
+  sudo "${cmd_array[@]}"
+  local exit_code=$?
+
+  if [[ $exit_code -eq 0 ]]; then
+    _op_notify "success" "✅ Privileged command completed"
+  else
+    _op_notify "failure" "❌ Command failed (exit: $exit_code)"
+  fi
+
+  return $exit_code
 }
 
 # Get threat level color code
@@ -909,6 +1221,44 @@ matrix_rain() {
   local charset=${4:-katakana}
   local show_fps=${5:-false}
 
+  # === INPUT VALIDATION ===
+
+  # Validate duration (1-300 seconds)
+  if ! [[ "$duration" =~ ^[0-9]+$ ]] || [[ $duration -lt 1 ]] || [[ $duration -gt 300 ]]; then
+    echo "⚠️ Invalid duration (must be 1-300): $duration"
+    duration=5
+  fi
+
+  # Validate density (1-100)
+  if ! [[ "$density" =~ ^[0-9]+$ ]] || [[ $density -lt 1 ]] || [[ $density -gt 100 ]]; then
+    echo "⚠️ Invalid density (must be 1-100): $density"
+    density=50
+  fi
+
+  # Validate theme (whitelist only)
+  case "$theme" in
+    matrix|cyber|blood|ice|fire) ;;
+    *)
+      echo "⚠️ Invalid theme. Using 'matrix'"
+      theme="matrix"
+      ;;
+  esac
+
+  # Validate charset (whitelist only)
+  case "$charset" in
+    katakana|binary|hex|ascii|dna) ;;
+    *)
+      echo "⚠️ Invalid charset. Using 'katakana'"
+      charset="katakana"
+      ;;
+  esac
+
+  # Validate show_fps (boolean only)
+  if [[ "$show_fps" != "true" && "$show_fps" != "false" ]]; then
+    show_fps="false"
+  fi
+
+  # Terminal capability check
   if ! command -v tput &>/dev/null; then
     echo "⚠️ Terminal not supported for matrix effect"
     return 1
@@ -917,13 +1267,15 @@ matrix_rain() {
   local width=$(tput cols 2>/dev/null)
   local height=$(tput lines 2>/dev/null)
 
-  if [[ -z "$width" || -z "$height" || "$width" -lt 10 || "$height" -lt 10 ]]; then
-    echo "⚠️ Terminal dimensions invalid: ${width}x${height}"
-    return 1
-  fi
+  # Bounds checking with safe defaults
+  width=${width:-80}
+  height=${height:-24}
 
-  width=$((width > 500 ? 500 : width))
-  height=$((height > 200 ? 200 : height))
+  # Enforce maximum dimensions to prevent DoS
+  [[ $width -lt 10 ]] && width=10
+  [[ $height -lt 10 ]] && height=10
+  [[ $width -gt 300 ]] && width=300
+  [[ $height -gt 100 ]] && height=100
 
   local chars
   case "$charset" in
@@ -1339,27 +1691,34 @@ get_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
 
   local key="$1"
-  local lock_file="${_zsh_cache_file}.lock"
-  local timeout=5
-  local start_time=$(date +%s)
+  local cache_file="$_zsh_cache_file"
+  local lock_file="${cache_file}.lock"
 
-  # Improved locking with timeout
-  while [[ -f "$lock_file" ]]; do
-    [[ $(($(date +%s) - start_time)) -gt $timeout ]] && rm -f "$lock_file"
-    sleep 0.01
-  done
+  # Create cache directory if needed
+  mkdir -p "$(dirname "$cache_file")"
 
-  # Atomic lock creation
-  if (set -C; echo $$ > "$lock_file") 2>/dev/null; then
-    local expiry=$(jq -r ".${key}.expiry" "$_zsh_cache_file" 2>/dev/null)
-    local now=$(date +%s)
-
-    rm -f "$lock_file"
-
-    if [[ -n "$expiry" && "$now" -lt "$expiry" ]]; then
-      jq -r ".${key}.value" "$_zsh_cache_file"
-      return 0
+  # Use simple file-based locking
+  if [[ -f "$lock_file" ]]; then
+    local lock_age=$(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0)))
+    if [[ $lock_age -gt 5 ]]; then
+      rm -f "$lock_file"
+    else
+      return 1
     fi
+  fi
+
+  echo $$ > "$lock_file" || return 1
+
+  # Read cache
+  local expiry=$(jq -r ".${key}.expiry" "$cache_file" 2>/dev/null)
+  local now=$(date +%s)
+
+  # Cleanup lock
+  rm -f "$lock_file"
+
+  if [[ -n "$expiry" && "$expiry" != "null" && "$now" -lt "$expiry" ]]; then
+    jq -r ".${key}.value" "$cache_file"
+    return 0
   fi
 
   return 1
@@ -1368,23 +1727,53 @@ get_cached() {
 set_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
 
-
   local key="$1"
   local value="$2"
   local expiry=$(($(date +%s) + _zsh_cache_ttl))
 
-  local cache_dir=$(dirname "$_zsh_cache_file")
-  mkdir -p "$cache_dir"
-  local temp_file=$(mktemp "$cache_dir/zsh_cache.XXXXXX")
+  local cache_file="$_zsh_cache_file"
+  local lock_file="${cache_file}.lock"
 
-  if [[ -f "$_zsh_cache_file" ]]; then
-    jq --arg key "$key" --argjson value "$(echo "$value" | jq -R -s .)" --argjson expiry "$expiry" \
-      '.[$key] = {value: $value, expiry: $expiry}' "$_zsh_cache_file" > "$temp_file" && \
-      mv "$temp_file" "$_zsh_cache_file"
-  else
-    jq --arg key "$key" --argjson value "$(echo "$value" | jq -R -s .)" --argjson expiry "$expiry" \
-      '.[$key] = {value: $value, expiry: $expiry}' <(echo '{}') > "$_zsh_cache_file"
+  # Create cache directory with secure permissions
+  local cache_dir=$(dirname "$cache_file")
+  mkdir -p "$cache_dir"
+  chmod 700 "$cache_dir"
+
+  # Use simple file-based locking
+  if [[ -f "$lock_file" ]]; then
+    local lock_age=$(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0)))
+    if [[ $lock_age -gt 5 ]]; then
+      rm -f "$lock_file"
+    else
+      return 1
+    fi
   fi
+
+  echo $$ > "$lock_file" || return 1
+
+  # Critical section
+  local temp_file=$(mktemp "$cache_dir/.cache.XXXXXX")
+  chmod 600 "$temp_file"
+
+  # Initialize if doesn't exist
+  if [[ ! -f "$cache_file" ]]; then
+    echo '{}' > "$cache_file"
+    chmod 600 "$cache_file"
+  fi
+
+  # Update cache
+  jq --arg key "$key" \
+     --arg value "$value" \
+     --argjson expiry "$expiry" \
+     '.[$key] = {value: $value, expiry: $expiry}' \
+     "$cache_file" > "$temp_file"
+
+  # Atomic move
+  mv "$temp_file" "$cache_file"
+  chmod 600 "$cache_file"
+
+  # Cleanup lock
+  rm -f "$lock_file"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1887,31 +2276,107 @@ ai() {
 
     case "${choice:l}" in  # :l converts to lowercase
       e|execute)
-        # Validate against dangerous patterns (inline check)
-        local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
-        for pat in "${dangerous[@]}"; do
-          if [[ "$suggested_command" == *"$pat"* ]]; then
-             echo "🚨 Blocked dangerous command: $pat"
-             return 1
-          fi
-        done
+  # === SECURITY HARDENING v2.0 ===
 
-        # Log command execution for audit trail
-        mkdir -p "$XDG_STATE_HOME/zsh"
-        echo "[$(date -Iseconds)] AI-CMD: $suggested_command" >> "$XDG_STATE_HOME/zsh/ai_command_log"
+  # 1. Character whitelist validation
+  if [[ ! "$suggested_command" =~ ^[a-zA-Z0-9_/.\ :,@-]+$ ]]; then
+    _op_notify "failure" "🚨 Invalid characters detected in command"
+    return 1
+  fi
 
-        # === SECURE AI COMMAND EXECUTION (CVE-2026-001 FIX) ===
-        # Multi-layer validation before execution
-        local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
-        for pat in "${dangerous[@]}"; do
-          if [[ "$suggested_command" == *"$pat"* ]]; then
-            echo "🚨 Security: Dangerous command pattern detected: $pat"
-            return 1
-          fi
-        done
+  # 2. Dangerous pattern blacklist
+  local -a dangerous_patterns=(
+    'rm -rf /'
+    'rm -rf ~'
+    'rm -rf *'
+    'dd if='
+    ':(){:|:&};:'
+    'mkfs'
+    'wipefs'
+    '>/etc/'
+    '>>/etc/'
+    'chmod 777'
+    'chmod -R 777'
+    'chown -R'
+    ';'
+    '&&'
+    '||'
+    '`'
+    '$('
+    '|sudo'
+  )
 
-        # Execute with proper error handling
-        eval "$suggested_command"
+  for pattern in "${dangerous_patterns[@]}"; do
+    if [[ "$suggested_command" == *"$pattern"* ]]; then
+      _op_notify "failure" "🚨 Blocked dangerous pattern: $pattern"
+      return 1
+    fi
+  done
+
+  # 3. User confirmation with full command display
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "⚠️  COMMAND EXECUTION CONFIRMATION"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Command: $suggested_command"
+  echo "Working Directory: $PWD"
+  echo "User: $(whoami)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo -n "Execute this command? Type 'YES' to confirm: "
+  read -r confirm
+
+  if [[ "$confirm" != "YES" ]]; then
+    _op_notify "warning" "Command execution cancelled"
+    return 0
+  fi
+
+  # 4. Audit logging
+  local audit_log="$XDG_STATE_HOME/zsh/ai_command_audit.log"
+  mkdir -p "$(dirname "$audit_log")"
+  touch "$audit_log"
+  chmod 600 "$audit_log"
+
+  {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Timestamp: $(date -Iseconds)"
+    echo "User: $(whoami)"
+    echo "PWD: $PWD"
+    echo "Query: $query"
+    echo "Command: $suggested_command"
+    echo "PID: $$"
+  } >> "$audit_log"
+
+  # 5. Execute in restricted subshell
+  (
+    # Resource limits
+    ulimit -t 600      # 10 min CPU time
+    ulimit -v 2097152  # 2GB virtual memory
+    ulimit -f 10485760 # 10GB max file size
+    ulimit -c 0        # No core dumps
+    ulimit -n 1024     # Max 1024 open files
+
+    # Execute with explicit word splitting
+    set -f  # Disable globbing
+    eval "$suggested_command"
+  )
+
+  local exit_code=$?
+
+  # 6. Log execution result
+  {
+    echo "Exit Code: $exit_code"
+    echo "Completed: $(date -Iseconds)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+  } >> "$audit_log"
+
+  if [[ $exit_code -eq 0 ]]; then
+    _op_notify "success" "Command completed successfully"
+  else
+    _op_notify "failure" "Command failed with exit code: $exit_code"
+  fi
+
+  return $exit_code
         ;;
       b|buffer)
         # Put in command buffer for editing (safest option)
@@ -2459,27 +2924,76 @@ usbformat() {
     return 1
   }
 
-  echo
   echo "Enter device name (example: sdb)"
   echo "Or press Q to quit"
   print -n "> "
   read DEV
 
   [[ "$DEV" =~ ^[Qq]$ ]] && { echo "Exited."; return 0; }
-  # Enhanced validation: alphanumeric only, no special characters
-  if [[ -z "$DEV" || ! "$DEV" =~ ^[a-zA-Z0-9]+$ || ! -b "/dev/$DEV" ]]; then
-    echo "❌ Invalid device: /dev/$DEV (must be alphanumeric block device)"
+
+  # === ENHANCED VALIDATION ===
+
+  # 1. Character validation (alphanumeric only)
+  if [[ -z "$DEV" ]] || [[ ! "$DEV" =~ ^[a-zA-Z0-9]+$ ]]; then
+    echo "❌ Invalid device name (alphanumeric only)"
     return 1
   fi
 
-  local removable=$(lsblk -dn -o RM "/dev/$DEV" 2>/dev/null | tr -d ' ')
+  # 2. Block system disks (sda, nvme0n1, mmcblk0)
+  local -a forbidden_devices=(
+    "sda" "sda1" "sda2" "sda3" "sda4" "sda5"
+    "nvme0n1" "nvme0n1p1" "nvme0n1p2" "nvme0n1p3"
+    "mmcblk0" "mmcblk0p1" "mmcblk0p2"
+  )
+
+  for forbidden in "${forbidden_devices[@]}"; do
+    if [[ "$DEV" == "$forbidden" ]]; then
+      echo "🚨 BLOCKED: $DEV is a system disk"
+      return 1
+    fi
+  done
+
+  # 3. Verify device exists
+  if [[ ! -b "/dev/$DEV" ]]; then
+    echo "❌ Block device not found: /dev/$DEV"
+    return 1
+  fi
+
+  # 4. Check if device is removable
+  local removable=$(cat "/sys/block/${DEV}/removable" 2>/dev/null || cat "/sys/block/${DEV%[0-9]}/removable" 2>/dev/null)
+
   if [[ "$removable" != "1" ]]; then
-    echo "⚠️ /dev/$DEV is not marked removable."
-    echo "Type FORCE to continue or Q to quit"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  WARNING: /dev/$DEV is NOT marked as removable"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "This may be a system disk!"
+    echo ""
+    echo "Type 'I UNDERSTAND THE RISKS' to continue"
+    echo "Or Q to quit"
     print -n "> "
     read FORCE
+
     [[ "$FORCE" =~ ^[Qq]$ ]] && { echo "Exited."; return 0; }
-    [[ "$FORCE" != "FORCE" ]] && { echo "Aborted."; return 1; }
+
+    if [[ "$FORCE" != "I UNDERSTAND THE RISKS" ]]; then
+      echo "❌ Aborted for safety"
+      return 1
+    fi
+  fi
+
+  # 5. Check if device is mounted
+  if mount | grep -q "^/dev/$DEV"; then
+    echo "⚠️  Device is currently mounted:"
+    mount | grep "^/dev/$DEV"
+    echo ""
+    echo "Attempting to unmount..."
+    sudo umount "/dev/${DEV}"* 2>/dev/null
+    sleep 1
+
+    if mount | grep -q "^/dev/$DEV"; then
+      echo "❌ Failed to unmount device. Close any programs using it."
+      return 1
+    fi
   fi
 
   echo
@@ -2641,6 +3155,7 @@ pathshow() {
 
 extract() {
   local archive="$1"
+
   if [[ -z "$archive" ]]; then
     echo "Usage: extract <archive>"
     return 1
@@ -2651,68 +3166,225 @@ extract() {
     return 1
   fi
 
+  # Create secure extraction directory
+  local extract_dir="./extracted_$(date +%s)_$$"
+  mkdir -p "$extract_dir" || {
+    echo "❌ Failed to create extraction directory"
+    return 1
+  }
+
+  # Make it absolute path
+  extract_dir=$(cd "$extract_dir" && pwd)
+
+  echo "🔍 Scanning archive for security issues..."
+
   case "$archive" in
-    *.tar.bz2|*.tbz2)
-      command_exists tar || { echo "⚠️ 'tar' required."; return 1; }
-      tar xjf "$archive"
+    *.tar.bz2|*.tbz2|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.zst|*.tzst|*.tar)
+      # Security check: scan for path traversal
+      if tar -tf "$archive" 2>/dev/null | grep -q '\.\./'; then
+        echo "🚨 SECURITY: Archive contains path traversal (../) - BLOCKED"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
+      # Security check: scan for absolute paths
+      if tar -tf "$archive" 2>/dev/null | grep -q '^/'; then
+        echo "🚨 SECURITY: Archive contains absolute paths - BLOCKED"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
+      # Security check: scan for suspicious filenames
+      if tar -tf "$archive" 2>/dev/null | grep -qE '(\.\.|\$|\`|\||;|&)'; then
+        echo "🚨 SECURITY: Archive contains suspicious filenames - BLOCKED"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
+      echo "✅ Security checks passed"
+
+      # Extract based on compression
+      case "$archive" in
+        *.tar.bz2|*.tbz2)
+          tar -xjf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          ;;
+        *.tar.gz|*.tgz)
+          tar -xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          ;;
+        *.tar.xz|*.txz)
+          tar -xJf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          ;;
+        *.tar.zst|*.tzst)
+          tar --zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions 2>/dev/null || \
+          tar -I zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          ;;
+        *.tar)
+          tar -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          ;;
+      esac
       ;;
-    *.tar.gz|*.tgz)
-      command_exists tar || { echo "⚠️ 'tar' required."; return 1; }
-      tar xzf "$archive"
-      ;;
-    *.tar.xz|*.txz)
-      command_exists tar || { echo "⚠️ 'tar' required."; return 1; }
-      tar xJf "$archive"
-      ;;
-    *.tar.zst|*.tzst)
-      command_exists tar || { echo "⚠️ 'tar' required."; return 1; }
-      tar --zstd -xf "$archive" 2>/dev/null || tar -I zstd -xf "$archive"
-      ;;
-    *.tar)
-      command_exists tar || { echo "⚠️ 'tar' required."; return 1; }
-      tar xf "$archive"
-      ;;
+
     *.zip)
-      command_exists unzip || { echo "⚠️ 'unzip' required."; return 1; }
-      unzip "$archive"
+      if ! command_exists unzip; then
+        echo "⚠️ 'unzip' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
+      # Security check for zip files
+      if unzip -l "$archive" 2>/dev/null | grep -q '\.\./'; then
+        echo "🚨 SECURITY: Archive contains path traversal - BLOCKED"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
+      unzip -q "$archive" -d "$extract_dir"
       ;;
+
     *.rar)
-      command_exists unrar || { echo "⚠️ 'unrar' required."; return 1; }
-      unrar x "$archive"
+      if ! command_exists unrar; then
+        echo "⚠️ 'unrar' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+      unrar x "$archive" "$extract_dir/"
       ;;
+
     *.7z)
-      command_exists 7z || { echo "⚠️ '7z' required."; return 1; }
-      7z x "$archive"
+      if ! command_exists 7z; then
+        echo "⚠️ '7z' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+      7z x "$archive" -o"$extract_dir"
       ;;
+
     *.gz)
-      command_exists gunzip || { echo "⚠️ 'gunzip' required."; return 1; }
-      gunzip "$archive"
+      if ! command_exists gunzip; then
+        echo "⚠️ 'gunzip' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+      cp "$archive" "$extract_dir/"
+      gunzip "$extract_dir/$(basename "$archive")"
       ;;
+
     *.bz2)
-      command_exists bunzip2 || { echo "⚠️ 'bunzip2' required."; return 1; }
-      bunzip2 "$archive"
+      if ! command_exists bunzip2; then
+        echo "⚠️ 'bunzip2' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+      cp "$archive" "$extract_dir/"
+      bunzip2 "$extract_dir/$(basename "$archive")"
       ;;
+
     *.xz)
-      command_exists unxz || { echo "⚠️ 'unxz' required."; return 1; }
-      unxz "$archive"
+      if ! command_exists unxz; then
+        echo "⚠️ 'unxz' required"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+      cp "$archive" "$extract_dir/"
+      unxz "$extract_dir/$(basename "$archive")"
       ;;
+
     *)
       echo "❌ Unknown archive format: $archive"
+      rm -rf "$extract_dir"
       return 1
       ;;
   esac
+
+  local exit_code=$?
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "✅ Extracted to: $extract_dir"
+    echo "📁 Contents:"
+    ls -lah "$extract_dir"
+  else
+    echo "❌ Extraction failed"
+    rm -rf "$extract_dir"
+  fi
+
+  return $exit_code
 }
 
 please() {
   local last_cmd
-  last_cmd=$(fc -ln -1 2>/dev/null)
+  last_cmd=$(fc -ln -1 2>/dev/null | sed 's/^[[:space:]]*//')
+
   if [[ -z "$last_cmd" ]]; then
-    echo "⚠️ No previous command to run."
+    echo "⚠️ No previous command found"
     return 1
   fi
 
-  echo "🔐 sudo $last_cmd"
+  # Dangerous pattern blacklist
+  local -a dangerous=(
+    'rm -rf /'
+    'rm -rf ~'
+    'rm -rf *'
+    'rm -rf .'
+    'dd if='
+    'mkfs'
+    'wipefs'
+    'fdisk'
+    '>/etc/'
+    '>>/etc/'
+    'chmod -R 777'
+    'chown -R root'
+    ':(){:|:&};:'
+  )
+
+  # Check blacklist
+  for pattern in "${dangerous[@]}"; do
+    if [[ "$last_cmd" == *"$pattern"* ]]; then
+      echo "🚨 BLOCKED: Command contains dangerous pattern: $pattern"
+      echo "Command: $last_cmd"
+      return 1
+    fi
+  done
+
+  # Display and confirm
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "🔐 SUDO EXECUTION REQUEST"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Command: $last_cmd"
+  echo "User: $(whoami) → root"
+  echo "PWD: $PWD"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo -n "Type 'YES' to execute with sudo: "
+  read -r confirm
+
+  if [[ "$confirm" != "YES" ]]; then
+    echo "❌ Cancelled"
+    return 0
+  fi
+
+  # Audit log
+  local audit_log="$XDG_STATE_HOME/zsh/sudo_audit.log"
+  mkdir -p "$(dirname "$audit_log")"
+  chmod 600 "$audit_log"
+
+  {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Timestamp: $(date -Iseconds)"
+    echo "User: $(whoami)"
+    echo "PWD: $PWD"
+    echo "Command: $last_cmd"
+  } >> "$audit_log"
+
+  # Execute with proper word splitting
   sudo sh -c "$last_cmd"
+  local exit_code=$?
+
+  {
+    echo "Exit Code: $exit_code"
+    echo "Completed: $(date -Iseconds)"
+    echo ""
+  } >> "$audit_log"
+
+  return $exit_code
 }
 
 genpass() {
@@ -3030,6 +3702,9 @@ fi
 # Usage: threat_intel [--update] [--critical] [--severity high|medium|low]
 # Features: NVD API v2.0, CVSS filtering, exploit checking, portable date handling
 threat_intel() {
+  # Rate limit: 5 calls per 30 seconds
+  _check_rate_limit "threat_intel" 5 30 || return 1
+
   local action="${1:-status}"
   local severity="${2:-high}"
   local cache_dir="$XDG_CACHE_HOME/zsh"
