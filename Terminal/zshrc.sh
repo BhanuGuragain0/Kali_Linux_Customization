@@ -188,6 +188,7 @@ zsh_load_module zsh/mathfunc
 
 # Lazy-load expensive modules
 autoload -Uz zmv
+autoload -Uz add-zsh-hook
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 5: POWERLEVEL10K INSTANT PROMPT
@@ -300,13 +301,16 @@ zstyle ':completion:*' file-sort name
 zstyle ':completion:*' list-suffixes true
 zstyle ':completion:*' matcher-list '' 'm:{[:lower:][:upper:]}={[:upper:][:lower:]}' 'r:|[._-]=* r:|=*' 'l:|=* r:|=*'
 zstyle ':completion:*' menu select=long
-zstyle ':completion:*' select-prompt '%SScrolling active: current selection at %p%s'
+zstyle ':completion:*' select-prompt '%F{cyan}%SScrolling active: current selection at %p%s%f'
 zstyle ':completion:*' use-compctl false
 zstyle ':completion:*' verbose true
 zstyle ':completion:*' squeeze-slashes true
-zstyle ':completion:*' list-colors "${LS_COLORS}"
+zstyle ':completion:*' list-colors 'fi=36:di=36:ln=36:pi=36:so=36:bd=36;1:cd=36;1:ex=36:ma=48;5;24;38;5;51'
 zstyle ':completion:*' group-name ''
-zstyle ':completion:*' format '%F{yellow}%d%f'
+zstyle ':completion:*' format '%F{cyan}%d%f'
+zstyle ':completion:*:descriptions' format '%F{cyan}%d%f'
+zstyle ':completion:*:messages' format '%F{cyan}%d%f'
+zstyle ':completion:*:warnings' format '%F{red}no matches for: %d%f'
 zstyle ':completion:*' special-dirs true
 zstyle ':completion:*' accept-exact '*(N)'
 zstyle ':completion:*' use-cache on
@@ -314,6 +318,9 @@ zstyle ':completion:*' cache-path "$XDG_CACHE_HOME/zsh/completion"
 
 zstyle ':completion:*:*:kill:*:processes' list-colors '=(#b) #([0-9]#)*=0=01;31'
 zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
+
+# fzf-tab cyan theme
+zstyle ':fzf-tab:*' fzf-flags '--color=fg:cyan,fg+:cyan,hl:cyan,hl+:cyan,info:cyan,prompt:cyan,pointer:cyan,border:cyan'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 9: COLOR SYSTEM (NERD FONTS + THEMES)
@@ -380,7 +387,7 @@ _OP_CONFIG[exec_prefix]="🧠"
 _OP_CONFIG[exec_tag]="[OP-EXEC]"
 _OP_CONFIG[operator_name]="Shadow@Bh4nu 😈💀"
 _OP_CONFIG[divider_char]="─"
-_OP_CONFIG[divider_width]=64
+_OP_CONFIG[divider_width]="auto"
 _OP_CONFIG[show_command]=true
 _OP_CONFIG[show_divider]=true
 _OP_CONFIG[show_context]=true
@@ -486,14 +493,33 @@ _op_notify() {
 }
 
 # Build separator text safely for any UTF-8 character.
+_op_resolve_divider_width() {
+  local width="${1:-auto}"
+  local resolved=64
+
+  if [[ "$width" == "auto" ]]; then
+    if [[ -n "$COLUMNS" && "$COLUMNS" =~ ^[0-9]+$ ]]; then
+      resolved="$COLUMNS"
+    elif command -v tput >/dev/null 2>&1; then
+      resolved="$(tput cols 2>/dev/null)"
+    fi
+  elif [[ "$width" =~ ^[0-9]+$ ]]; then
+    resolved="$width"
+  fi
+
+  [[ "$resolved" =~ ^[0-9]+$ ]] || resolved=64
+  (( resolved < 32 )) && resolved=32
+  (( resolved > 220 )) && resolved=220
+  print -r -- "$resolved"
+}
+
 _op_build_separator() {
-  local width="${1:-64}"
+  local width="${1:-auto}"
   local char="${2:-━}"
   local out=""
   local i
 
-  [[ "$width" =~ ^[0-9]+$ ]] || width=64
-  (( width < 1 )) && width=64
+  width="$(_op_resolve_divider_width "$width")"
 
   for ((i=0; i<width; i++)); do
     out+="$char"
@@ -505,7 +531,7 @@ _op_build_separator() {
 _op_render_auth_banner() {
   [[ "${_OP_CONFIG[show_auth_banner]:-true}" != "true" ]] && return 0
 
-  local _w="${_OP_CONFIG[divider_width]:-64}"
+  local _w="${_OP_CONFIG[divider_width]:-auto}"
   local _c="${_OP_CONFIG[output_separator_char]:-━}"
   local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
   local _msg="${_OP_CONFIG[auth_banner_text]:-⚠😒 AUTHENTICATION REQUIRED [OPS_Junior 🫩] --- Enter password 🙄 | Failure = SYSTEM BREAK 🤬}"
@@ -545,7 +571,7 @@ sudo() {
   local auth_rc=$?
   (( auth_rc != 0 )) && return "$auth_rc"
 
-  local _w="${_OP_CONFIG[divider_width]:-64}"
+  local _w="${_OP_CONFIG[divider_width]:-auto}"
   local _c="${_OP_CONFIG[output_separator_char]:-━}"
   local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
   printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
@@ -559,112 +585,145 @@ _op_render_execution_header() {
   local timestamp_ampm
   timestamp_ampm=$(date '+%I:%M:%S %p')
   local operator_name="${_OP_CONFIG[operator_name]:-Shadow@Bh4nu 😈💀}"
-  local cmd_word="${full_command%%[[:space:]]*}"
-  cmd_word="${cmd_word##*/}"
-  cmd_word="${cmd_word:l}"
+  local cmd_word=""
+  local safe_command="$(_sanitize_output "$full_command")"
+  local -a tokens
+  local token i
   local command_type="COMMAND"
   local cmd_icon="$(_icon processing)"
 
-  # Command classification based on the first token.
+  # Parse command with shell-like tokenization and skip wrappers/env assignments.
+  tokens=("${(z)full_command}")
+  for ((i=1; i<=${#tokens[@]}; i++)); do
+    token="${tokens[$i]}"
+    [[ -z "$token" ]] && continue
+
+    case "$token" in
+      command|builtin|noglob|nocorrect|time) continue ;;
+      env)
+        continue
+        ;;
+      --)
+        continue
+        ;;
+      # Skip env-style prefix assignments (e.g., VAR=1 cmd)
+      [[:alpha:]_][[:alnum:]_]*=*)
+        continue
+        ;;
+      -*)
+        continue
+        ;;
+      *)
+        cmd_word="$token"
+        break
+        ;;
+    esac
+  done
+
+  if [[ -z "$cmd_word" ]]; then
+    cmd_word="${full_command##[[:space:]]#}"
+    cmd_word="${cmd_word%%[[:space:]]*}"
+  fi
+
+  cmd_word="${cmd_word##*/}"
+  cmd_word="${cmd_word:l}"
+
+  # Command classification based on resolved executable token.
   case "$cmd_word" in
     sudo|doas|pkexec)
-      command_type="ELEVATED COMMAND"
+      command_type="ROOT Command"
       cmd_icon="$(_icon elevated)"
       ;;
     nmap|gobuster|nikto|masscan|dirb|dirsearch|wfuzz|hydra|burpsuite|sqlmap|metasploit|msfconsole|searchsploit|enum4linux|ffuf|wpscan|amass|whatweb|netexec|crackmapexec|responder|tcpdump|wireshark|tshark|aircrack-ng|hashcat|john)
-      command_type="SECURITY/RECON COMMAND"
+      command_type="RECON Command"
       cmd_icon="$(_icon recon)"
       ;;
     ai|chatgpt|claude|gemini|bard|copilot|ollama|huggingface)
-      command_type="AI/MACHINE LEARNING COMMAND"
+      command_type="AI Command"
       cmd_icon="$(_icon ai_exec)"
       ;;
-    python|python3|node|go|java|javac|ruby|perl|php|rustc|cargo|gcc|g++|clang|clang++|make|cmake|meson|ninja|bazel|buck|gradle|mvn|maven|ant|webpack|rollup|vite|parcel)
-      command_type="DEVELOPMENT COMMAND"
+    python|python3|node|go|java|javac|ruby|perl|php|rustc|cargo|gcc|g++|clang|clang++|make|cmake|meson|ninja|bazel|buck|gradle|mvn|maven|ant|webpack|rollup|vite|parcel|docker|kubectl|helm|terraform|ansible|puppet|chef|kops|eksctl|gcloud|az|aws|podman|lxc|lxd)
+      command_type="DEV Command"
       cmd_icon="$(_icon dev)"
       ;;
-    docker|kubectl|helm|terraform|ansible|puppet|chef|kops|eksctl|gcloud|az|aws|podman|lxc|lxd)
-      command_type="CLOUD/DEVOPS COMMAND"
-      cmd_icon="$(_icon cloud)"
-      ;;
     git|svn|hg|bzr|cvs)
-      command_type="VERSION CONTROL COMMAND"
+      command_type="VERSIONING Command"
       cmd_icon="$(_icon version)"
       ;;
     curl|wget|http|ssh|rsync|scp|sftp|ftp|telnet|netcat|nc|ncat|socat|ping|traceroute|dig|nslookup|host|aria2c|rclone|lftp)
-      command_type="NETWORK/COMMUNICATIONS COMMAND"
+      command_type="NETWORK Command"
       cmd_icon="$(_icon scanning)"
       ;;
     vim|nvim|vi|emacs|nano|code|codium|subl|atom|vscode|intellij|pycharm|webstorm)
-      command_type="TEXT EDITOR/IDE COMMAND"
+      command_type="EDITOR Command"
       cmd_icon="$(_icon processing)"
       ;;
     apt|apt-get|dpkg|yum|dnf|rpm|pacman|yaourt|yay|brew|port|pkg|snap|flatpak|pip|pip3|npm|yarn|gem|composer)
-      command_type="PACKAGE MANAGEMENT COMMAND"
+      command_type="PACKAGE Command"
       cmd_icon="$(_icon processing)"
       ;;
     systemctl|service|journalctl|loginctl|crontab)
-      command_type="SYSTEM ADMINISTRATION COMMAND"
+      command_type="SYSADMIN Command"
       cmd_icon="$(_icon secure)"
       ;;
     find|grep|sed|awk|sort|uniq|cut|tr|wc|head|tail|cat|bat|jq|less|more)
-      command_type="FILE/DATA OPERATIONS COMMAND"
+      command_type="FILE Command"
       cmd_icon="$(_icon analyzing)"
       ;;
     mysql|postgres|postgresql|psql|sqlite|sqlite3|mongo|mongosh|redis-cli|elasticsearch|cassandra|cqlsh|oracle|sqlplus)
-      command_type="DATABASE OPERATIONS COMMAND"
+      command_type="DATABASE Command"
       cmd_icon="$(_icon computing)"
       ;;
     ffmpeg|avconv|convert|identify|display|eog|feh|gimp|inkscape|blender|kdenlive|obs)
-      command_type="MULTIMEDIA/GRAPHICS COMMAND"
+      command_type="MULTIMEDIA Command"
       cmd_icon="$(_icon processing)"
       ;;
     virtualbox|vboxmanage|vmware|kvm|qemu|libvirt|virsh)
-      command_type="VIRTUALIZATION/CONTAINERS COMMAND"
+      command_type="VM Command"
       cmd_icon="$(_icon cloud)"
       ;;
     man|info|help|tldr|cheat|howdoi|explainshell)
-      command_type="DOCUMENTATION/HELP COMMAND"
+      command_type="HELP Command"
       cmd_icon="$(_icon info)"
       ;;
     cd|pwd|ls|la|ll|tree|which|whereis|type|whatis|apropos)
-      command_type="NAVIGATION/SHELL COMMAND"
+      command_type="SHELL Command"
       cmd_icon="$(_icon executing)"
       ;;
     tar|zip|unzip|gzip|gunzip|bzip2|bunzip2|xz|unxz|7z|p7zip|rar|unrar|zstd|unzstd)
-      command_type="ARCHIVE/COMPRESSION COMMAND"
+      command_type="ARCHIVE Command"
       cmd_icon="$(_icon processing)"
       ;;
     ps|top|htop|kill|killall|nice|renice|jobs|fg|bg|disown|nohup|screen|tmux)
-      command_type="PROCESS MANAGEMENT COMMAND"
+      command_type="RUNTIME Command"
       cmd_icon="$(_icon secure)"
       ;;
     lscpu|lsmem|lsblk|fdisk|df|du|free|uname|lspci|lsusb|sensors|acpi|dmidecode)
-      command_type="HARDWARE/SYSTEM INFO COMMAND"
+      command_type="SYSINFO Command"
       cmd_icon="$(_icon analyzing)"
       ;;
     ip|ifconfig|route|iptables|ufw|firewalld|firewall-cmd|nft|netplan|nmcli|iwconfig|iwlist)
-      command_type="NETWORK CONFIGURATION COMMAND"
+      command_type="NETCONFIG Command"
       cmd_icon="$(_icon scanning)"
       ;;
     init|rc|upstart|systemd|cron)
-      command_type="SYSTEM SERVICES COMMAND"
+      command_type="SERVICES Command"
       cmd_icon="$(_icon secure)"
       ;;
     auditd|ausearch|aureport|fail2ban|nftables|selinux|setenforce|getenforce)
-      command_type="SECURITY AUDITING COMMAND"
+      command_type="AUDIT Command"
       cmd_icon="$(_icon recon)"
       ;;
     perf|strace|ltrace|valgrind|gdb|lldb|time|timeout)
-      command_type="PERFORMANCE MONITORING COMMAND"
+      command_type="PERF Command"
       cmd_icon="$(_icon analyzing)"
       ;;
     dd|clone|clonezilla|backup|restore|dump|import|export|borg|restic|rsnapshot)
-      command_type="BACKUP/RECOVERY COMMAND"
+      command_type="RECOVERY Command"
       cmd_icon="$(_icon processing)"
       ;;
     bash|sh|zsh|fish|ksh|csh|tcsh|source|exec|eval)
-      command_type="SHELL SCRIPTING COMMAND"
+      command_type="AUTOMATION Command"
       cmd_icon="$(_icon executing)"
       ;;
   esac
@@ -675,11 +734,11 @@ _op_render_execution_header() {
     "$cmd_icon" \
     "$command_type" \
     "$timestamp_ampm" \
-    "$full_command"
+    "$safe_command"
 
   # Clean separator
   if [[ "${_OP_CONFIG[show_divider]}" == "true" ]]; then
-    local _w="${_OP_CONFIG[divider_width]:-64}"
+    local _w="${_OP_CONFIG[divider_width]:-auto}"
     local _c="${_OP_CONFIG[output_separator_char]:-━}"
     local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
     printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
@@ -705,6 +764,13 @@ operator_config() {
         _OP_CONFIG[show_divider]="$value"
       fi
       ;;
+    divider_width)
+      if [[ "$value" == "auto" || "$value" =~ ^[0-9]+$ ]]; then
+        _OP_CONFIG[divider_width]="$value"
+      else
+        echo "divider_width must be 'auto' or a numeric value"
+      fi
+      ;;
     show_auth_banner)
       if [[ "$value" == true || "$value" == false ]]; then
         _OP_CONFIG[show_auth_banner]="$value"
@@ -713,7 +779,7 @@ operator_config() {
     auth_banner_text) _OP_CONFIG[auth_banner_text]="$value" ;;
     separator_color) _OP_CONFIG[separator_color]="$value" ;;
     *)
-      echo "Available settings: exec_prefix, exec_tag, operator_name, show_command, show_divider, show_auth_banner, auth_banner_text, separator_color"
+      echo "Available settings: exec_prefix, exec_tag, operator_name, show_command, show_divider, divider_width, show_auth_banner, auth_banner_text, separator_color"
       echo "Current config:"
       local -a op_keys=(
         exec_prefix exec_tag operator_name divider_char divider_width show_command show_divider show_context
@@ -1154,17 +1220,23 @@ gradient_text() {
 }
 
 format_bytes() {
-  local bytes=${1:-0}
-  local units=("B" "KB" "MB" "GB" "TB")
+  setopt localoptions ksharrays
+  local bytes="${1:-0}"
+  local units=("B" "KB" "MB" "GB" "TB" "PB")
   local unit_index=0
-  local size=$bytes
+  local size="$bytes"
 
-  while [[ $size -gt 1024 && $unit_index -lt 4 ]]; do
+  if [[ ! "$size" =~ ^[0-9]+$ ]]; then
+    echo "0B"
+    return 1
+  fi
+
+  while (( size >= 1024 && unit_index < ${#units[@]} - 1 )); do
     size=$((size / 1024))
     unit_index=$((unit_index + 1))
   done
 
-  echo "${size}${units[$unit_index]}"
+  printf '%s%s\n' "$size" "${units[$unit_index]}"
 }
 
 command_exists() {
@@ -1309,49 +1381,62 @@ loading_background() {
   local message="$1"
   local command="$2"
   local pid_file="/tmp/loading_$$.pid"
+  local spinner_pid=""
+  local parent_pid=$$
+  local exit_code=1
 
   {
     local i=0
     local chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    while kill -0 $$ 2>/dev/null; do
+    while kill -0 "$parent_pid" 2>/dev/null; do
       local spinner="${chars:$((i % ${#chars})):1}"
       printf "\r\033[38;2;0;255;255m[$spinner] %s\033[0m" "$message"
       ((i++))
       sleep 0.1
     done
   } &
-  local spinner_pid=$!
-  echo $spinner_pid > "$pid_file"
+  spinner_pid=$!
+  print -r -- "$spinner_pid" > "$pid_file"
 
   # Secure command execution with validation
-  if [[ "$command" =~ ^[a-zA-Z0-9_[:space:]/-]+$ ]]; then
-    # Additional validation against dangerous patterns
+  if [[ ! "$command" =~ ^[a-zA-Z0-9_[:space:]/.-]+$ ]]; then
+    echo "🚨 Security: Unsafe command detected"
+    exit_code=1
+  else
     local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
+    local lower_cmd="${command:l}"
+    local blocked=false
+    local pat
     for pat in "${dangerous[@]}"; do
-      if [[ "$command" == *"$pat"* ]]; then
+      if [[ "$lower_cmd" == *"$pat"* ]]; then
         echo "🚨 Security: Dangerous command pattern detected: $pat"
-        return 1
+        blocked=true
+        break
       fi
     done
-    bash -c "$command"
-  else
-    echo "🚨 Security: Unsafe command detected"
-    return 1
+
+    if [[ "$blocked" == false ]]; then
+      zsh -fc "$command"
+      exit_code=$?
+    else
+      exit_code=1
+    fi
   fi
-  local exit_code=$?
 
-  kill $spinner_pid 2>/dev/null
-  wait $spinner_pid 2>/dev/null
+  if [[ -n "$spinner_pid" && "$spinner_pid" =~ ^[0-9]+$ ]]; then
+    kill "$spinner_pid" 2>/dev/null
+    wait "$spinner_pid" 2>/dev/null
+  fi
   rm -f "$pid_file"
-
   printf "\r\033[K"
+
   if [[ $exit_code -eq 0 ]]; then
     echo -e "\033[38;2;0;255;0m✅ $message - Success\033[0m"
   else
     echo -e "\033[38;2;255;0;0m❌ $message - Failed (code: $exit_code)\033[0m"
   fi
 
-  return $exit_code
+  return "$exit_code"
 }
 
 matrix_rain() {
@@ -1592,7 +1677,8 @@ _zsh_cleanup_cpu_history() {
 _zsh_get_cpu_usage() {
   setopt localoptions ksharrays
   local mode="${1:-total}"
-  local stat_file="$XDG_CACHE_HOME/zsh/cpu_last_stat"
+  local stat_key="${mode//[^a-zA-Z0-9]/_}"
+  local stat_file="$XDG_CACHE_HOME/zsh/cpu_last_stat_${stat_key}"
 
   local -a last_stat
   if [[ -f "$stat_file" ]]; then
@@ -1833,93 +1919,128 @@ alias cpu-status='cpu_status'
 _zsh_cache_file="$XDG_CACHE_HOME/zsh/zsh_cache.json"
 _zsh_cache_ttl=60
 
+_zsh_stat_mtime() {
+  local file="$1"
+  local ts
+  ts=$(stat -c %Y "$file" 2>/dev/null || stat -f %m "$file" 2>/dev/null || echo 0)
+  [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
+  print -r -- "$ts"
+}
+
+_zsh_acquire_lock() {
+  local lock_file="$1"
+  local timeout="${2:-5}"
+  local start now mtime
+  start=$(date +%s)
+
+  while true; do
+    if ( set -o noclobber; : > "$lock_file" ) 2>/dev/null; then
+      print -r -- "$$" > "$lock_file"
+      return 0
+    fi
+
+    now=$(date +%s)
+    mtime=$(_zsh_stat_mtime "$lock_file")
+
+    if (( now - mtime > timeout )); then
+      rm -f "$lock_file"
+      continue
+    fi
+
+    if (( now - start >= timeout )); then
+      return 1
+    fi
+    sleep 0.05
+  done
+}
+
+_zsh_release_lock() {
+  local lock_file="$1"
+  [[ -n "$lock_file" ]] && rm -f "$lock_file"
+}
+
 get_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
+  command_exists jq || return 1
 
   local key="$1"
+  [[ -n "$key" ]] || return 1
+
   local cache_file="$_zsh_cache_file"
   local lock_file="${cache_file}.lock"
+  local now expiry value rc=1
 
   # Create cache directory if needed
   mkdir -p "$(dirname "$cache_file")"
+  [[ -f "$cache_file" ]] || return 1
 
-  # Use simple file-based locking
-  if [[ -f "$lock_file" ]]; then
-    local lock_age=$(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0)))
-    if [[ $lock_age -gt 5 ]]; then
-      rm -f "$lock_file"
-    else
-      return 1
-    fi
+  _zsh_acquire_lock "$lock_file" 5 || return 1
+
+  expiry=$(jq -er --arg key "$key" '.[$key].expiry // empty' "$cache_file" 2>/dev/null) || expiry=""
+  now=$(date +%s)
+  if [[ "$expiry" =~ ^[0-9]+$ ]] && (( now < expiry )); then
+    value=$(jq -er --arg key "$key" '.[$key].value' "$cache_file" 2>/dev/null) && rc=0
   fi
+  _zsh_release_lock "$lock_file"
 
-  echo $$ > "$lock_file" || return 1
-
-  # Read cache
-  local expiry=$(jq -r ".${key}.expiry" "$cache_file" 2>/dev/null)
-  local now=$(date +%s)
-
-  # Cleanup lock
-  rm -f "$lock_file"
-
-  if [[ -n "$expiry" && "$expiry" != "null" && "$now" -lt "$expiry" ]]; then
-    jq -r ".${key}.value" "$cache_file"
-    return 0
+  if (( rc == 0 )); then
+    print -r -- "$value"
   fi
-
-  return 1
+  return "$rc"
 }
 
 set_cached() {
   [[ "$ENABLE_CACHE_SYSTEM" != true ]] && return 1
+  command_exists jq || return 1
 
   local key="$1"
   local value="$2"
-  local expiry=$(($(date +%s) + _zsh_cache_ttl))
+  [[ -n "$key" ]] || return 1
+
+  local expiry=$(( $(date +%s) + _zsh_cache_ttl ))
 
   local cache_file="$_zsh_cache_file"
   local lock_file="${cache_file}.lock"
 
   # Create cache directory with secure permissions
-  local cache_dir=$(dirname "$cache_file")
+  local cache_dir
+  cache_dir=$(dirname "$cache_file")
   mkdir -p "$cache_dir"
   chmod 700 "$cache_dir"
 
-  # Use simple file-based locking
-  if [[ -f "$lock_file" ]]; then
-    local lock_age=$(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0)))
-    if [[ $lock_age -gt 5 ]]; then
-      rm -f "$lock_file"
-    else
-      return 1
-    fi
-  fi
+  _zsh_acquire_lock "$lock_file" 5 || return 1
 
-  echo $$ > "$lock_file" || return 1
-
-  # Critical section
-  local temp_file=$(mktemp "$cache_dir/.cache.XXXXXX")
+  local temp_file rc=1
+  temp_file=$(mktemp "$cache_dir/.cache.XXXXXX") || {
+    _zsh_release_lock "$lock_file"
+    return 1
+  }
   chmod 600 "$temp_file"
 
   # Initialize if doesn't exist
   if [[ ! -f "$cache_file" ]]; then
-    echo '{}' > "$cache_file"
+    printf '{}\n' > "$cache_file"
     chmod 600 "$cache_file"
   fi
 
-  # Update cache
-  jq --arg key "$key" \
-     --arg value "$value" \
-     --argjson expiry "$expiry" \
-     '.[$key] = {value: $value, expiry: $expiry}' \
-     "$cache_file" > "$temp_file"
+  # Self-heal invalid cache file JSON.
+  jq empty "$cache_file" >/dev/null 2>&1 || printf '{}\n' > "$cache_file"
 
-  # Atomic move
-  mv "$temp_file" "$cache_file"
-  chmod 600 "$cache_file"
+  if jq --arg key "$key" \
+        --arg value "$value" \
+        --argjson expiry "$expiry" \
+        '.[$key] = {value: $value, expiry: $expiry}' \
+        "$cache_file" > "$temp_file" 2>/dev/null; then
+    if mv "$temp_file" "$cache_file"; then
+      chmod 600 "$cache_file"
+      rc=0
+    fi
+  fi
 
-  # Cleanup lock
-  rm -f "$lock_file"
+  [[ -f "$temp_file" ]] && rm -f "$temp_file"
+  _zsh_release_lock "$lock_file"
+
+  return "$rc"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2303,9 +2424,17 @@ check_fs_integrity() {
   local has_warnings=false
 
   while IFS= read -r line; do
-    echo "🚨 WARNING: Integrity check FAILED for: $(echo $line | cut -d':' -f1)"
-    has_warnings=true
-  done < <(sha256sum -c --quiet "$INTEGRITY_BASELINE_FILE" 2>/dev/null | grep 'FAILED')
+    case "$line" in
+      *": FAILED")
+        echo "🚨 WARNING: Integrity check FAILED for: ${line%%:*}"
+        has_warnings=true
+        ;;
+      *": FAILED open or read")
+        echo "🚨 WARNING: Could not read baseline entry: ${line%%:*}"
+        has_warnings=true
+        ;;
+    esac
+  done < <(sha256sum -c "$INTEGRITY_BASELINE_FILE" 2>&1)
 
   if ! $has_warnings; then
     echo "✅ All checked files are intact."
@@ -2320,14 +2449,14 @@ check_network_anomalies() {
     return 1
   fi
 
-  echo "\nUnusual Listening Ports:"
+  printf "\nUnusual Listening Ports:\n"
   ss -tlpn 2>/dev/null | awk 'NR>1 {print $4}' | grep -E ':[0-9]+$' | cut -d':' -f2 | sort -un | while read port; do
     if ! grep -qwE "^\w+\s+${port}/(tcp|udp)" /etc/services 2>/dev/null; then
       echo "  - Unusual port: $port"
     fi
   done
 
-  echo "\nTop 10 Established Connections:"
+  printf "\nTop 10 Established Connections:\n"
   ss -tn 'state established' 2>/dev/null | awk 'NR>1 {print $5}' | cut -d':' -f1 | \
     grep -vE '^(127.0.0.1|::1)$' | sort | uniq -c | sort -nr | head -n 10
 }
@@ -3883,16 +4012,17 @@ threat_intel() {
       local nvd_url="https://services.nvd.nist.gov/rest/json/cves/2.0"
       nvd_url+="?lastModStartDate=${yesterday}&lastModEndDate=${today}"
 
-      local curl_opts="-s --max-time 30"
+      local -a curl_cmd=(curl -s --max-time 30)
       if [[ -n "$NVD_API_KEY" ]]; then
-        curl_opts+=" -H 'apiKey: $NVD_API_KEY'"
+        curl_cmd+=(-H "apiKey: $NVD_API_KEY")
         echo "  ℹ️  Using authenticated NVD API (higher rate limits)"
       else
         echo "  ⚠️  No NVD_API_KEY set (rate limited to 5 requests/30s)"
         echo "  💡 Get free key: https://nvd.nist.gov/developers/request-an-api-key"
       fi
 
-      local cve_data=$(eval curl $curl_opts "\"$nvd_url\"" 2>/dev/null)
+      local cve_data
+      cve_data=$("${curl_cmd[@]}" "$nvd_url" 2>/dev/null)
 
       if [[ -n "$cve_data" ]] && command -v jq &>/dev/null; then
         # === PARSE AND FILTER CVEs ===
@@ -4181,6 +4311,11 @@ perf_dashboard() {
     # Memory: (Total - Available) / Total * 100
     local memory_info=$(free -b 2>/dev/null | awk 'NR==2{printf "%.2f", ($2-$7)*100/$2}')
     local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2{print $5}' | sed 's/%//')
+    local cpu_usage_int="${cpu_usage%.*}"
+    local memory_info_int="${memory_info%.*}"
+    [[ "$cpu_usage_int" =~ ^[0-9]+$ ]] || cpu_usage_int=0
+    [[ "$memory_info_int" =~ ^[0-9]+$ ]] || memory_info_int=0
+    [[ "$disk_usage" =~ ^[0-9]+$ ]] || disk_usage=0
 
     # Network I/O (simplified)
     local network_io="N/A"
@@ -4202,11 +4337,11 @@ perf_dashboard() {
     echo "📈 Resource Status:"
 
     # CPU bar
-    local cpu_bar_length=$((cpu_usage / 2))
-    printf "CPU: [%-50s] %3d%%\n" "$(_repeat_char "$cpu_bar_length" "█")" "$cpu_usage"
+    local cpu_bar_length=$((cpu_usage_int / 2))
+    printf "CPU: [%-50s] %3d%%\n" "$(_repeat_char "$cpu_bar_length" "█")" "$cpu_usage_int"
 
     # Memory bar
-    local mem_bar_length=$((memory_info / 2))
+    local mem_bar_length=$((memory_info_int / 2))
     printf "MEM: [%-50s] %3.0f%%\n" "$(_repeat_char "$mem_bar_length" "█")" "$memory_info"
 
     # Disk bar
@@ -4286,7 +4421,7 @@ alias opt-aggressive='optimize_system --aggressive'
 alias dashboard='perf_dashboard'
 alias live='perf_dashboard'
 
-. "$HOME/.local/share/../bin/env"
+[[ -r "$HOME/.local/share/../bin/env" ]] && . "$HOME/.local/share/../bin/env"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 36: CONFIGURATION VERSION CONTROL (NEW in v4.1)
@@ -4639,7 +4774,7 @@ _op_precmd() {
 # === OUTPUT SEPARATION HELPER ===
 _op_show_output_separator() {
   if [[ "${_OP_CONFIG[show_output_separator]}" == "true" ]]; then
-    local _w="${_OP_CONFIG[divider_width]:-64}"
+    local _w="${_OP_CONFIG[divider_width]:-auto}"
     local _c="${_OP_CONFIG[output_separator_char]:-━}"
     local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
     printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
