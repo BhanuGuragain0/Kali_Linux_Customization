@@ -63,7 +63,13 @@ export EDITOR="nvim"
 export VISUAL="nvim"
 export PAGER="less"
 export BROWSER="firefox"
-export MANPAGER="sh -c 'col -bx | batcat -l man -p'"
+if command -v batcat >/dev/null 2>&1; then
+  export MANPAGER="sh -c 'col -bx | batcat -l man -p'"
+elif command -v bat >/dev/null 2>&1; then
+  export MANPAGER="sh -c 'col -bx | bat -l man -p'"
+else
+  export MANPAGER="less -R"
+fi
 
 # XDG Base Directory Specification
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -74,8 +80,9 @@ export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 # Terminal Configuration
 export TERM="xterm-256color"
 export COLORTERM="truecolor"
-export LANG="en_US.UTF-8"
-export LC_ALL="en_US.UTF-8"
+export LANG="${LANG:-C.UTF-8}"
+# Preserve user-defined LC_ALL; avoid forcing one globally.
+[[ -n "${LC_ALL:-}" ]] && export LC_ALL
 
 # Zsh-specific directories
 export ZSH_COMPCACHE_DIR="$XDG_CACHE_HOME/zsh/completion"
@@ -98,6 +105,7 @@ _zsh_create_directories() {
   local dir
   for dir in "${directories[@]}"; do
     [[ -d "$dir" ]] || mkdir -p "$dir"
+    chmod 700 "$dir" 2>/dev/null
   done
 }
 _zsh_create_directories
@@ -126,7 +134,7 @@ setopt HIST_IGNORE_SPACE
 setopt HIST_SAVE_NO_DUPS
 setopt HIST_REDUCE_BLANKS
 setopt HIST_VERIFY
-setopt HIST_BEEP
+unsetopt HIST_BEEP
 
 # Directory Navigation
 setopt AUTO_CD
@@ -166,7 +174,7 @@ setopt HUP
 
 # Input/Output
 setopt ALIASES
-setopt CLOBBER
+unsetopt CLOBBER
 setopt PRINT_EXIT_VALUE
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -202,6 +210,24 @@ _zsh_load_p10k_prompt() {
   [[ -r "$prompt_file" && -f "$prompt_file" ]] || return 1
 
   # Basic security validation
+  local owner_uid current_uid mode
+  current_uid=$(id -u 2>/dev/null)
+  owner_uid=$(stat -c %u "$prompt_file" 2>/dev/null || stat -f %u "$prompt_file" 2>/dev/null || echo "")
+  mode=$(stat -c %a "$prompt_file" 2>/dev/null || stat -f %Lp "$prompt_file" 2>/dev/null || echo "")
+
+  if [[ -n "$owner_uid" && -n "$current_uid" && "$owner_uid" != "$current_uid" ]]; then
+    echo "⚠️ p10k prompt file owner mismatch; refusing to source: $prompt_file" >&2
+    return 1
+  fi
+
+  if [[ "$mode" =~ ^[0-9]+$ ]]; then
+    local other_perms=$(( mode % 10 ))
+    if (( (other_perms & 2) != 0 )); then
+      echo "⚠️ p10k prompt file is world-writable; refusing to source: $prompt_file" >&2
+      return 1
+    fi
+  fi
+
   if grep -q "p10k" "$prompt_file" 2>/dev/null; then
     typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
     source "$prompt_file"
@@ -220,11 +246,21 @@ ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
 
 if [[ ! -d "$ZINIT_HOME" ]]; then
   mkdir -p "$(dirname "$ZINIT_HOME")"
-  git clone https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME"
+  if command -v git >/dev/null 2>&1; then
+    git clone --depth 1 https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME" || \
+      echo "⚠️ Failed to install zinit. Plugin loading disabled."
+  else
+    echo "⚠️ git not found. zinit/plugins disabled."
+  fi
 fi
 
-source "${ZINIT_HOME}/zinit.zsh"
-if [[ "$ENABLE_STARSHIP" != true ]]; then
+if [[ -r "${ZINIT_HOME}/zinit.zsh" ]]; then
+  source "${ZINIT_HOME}/zinit.zsh"
+else
+  echo "⚠️ zinit not available at ${ZINIT_HOME}/zinit.zsh"
+fi
+
+if (( ${+functions[zinit]} )) && [[ "$ENABLE_STARSHIP" != true ]]; then
   zinit light romkatv/powerlevel10k
 fi
 
@@ -234,6 +270,7 @@ fi
 
 _zsh_lazy_load_plugins() {
   [[ "$ENABLE_ASYNC_LOADING" != true ]] && return
+  (( ${+functions[zinit]} )) || return
 
   # Remove self from precmd to prevent re-execution
   precmd_functions=(${precmd_functions:#_zsh_lazy_load_plugins})
@@ -311,6 +348,7 @@ zstyle ':completion:*' format '%F{cyan}%d%f'
 zstyle ':completion:*:descriptions' format '%F{cyan}%d%f'
 zstyle ':completion:*:messages' format '%F{cyan}%d%f'
 zstyle ':completion:*:warnings' format '%F{red}no matches for: %d%f'
+zstyle ':completion:*' list-prompt '%F{cyan}-- more --%m --%f'
 zstyle ':completion:*' special-dirs true
 zstyle ':completion:*' accept-exact '*(N)'
 zstyle ':completion:*' use-cache on
@@ -320,7 +358,7 @@ zstyle ':completion:*:*:kill:*:processes' list-colors '=(#b) #([0-9]#)*=0=01;31'
 zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
 
 # fzf-tab cyan theme
-zstyle ':fzf-tab:*' fzf-flags '--color=fg:cyan,fg+:cyan,hl:cyan,hl+:cyan,info:cyan,prompt:cyan,pointer:cyan,border:cyan'
+zstyle ':fzf-tab:*' fzf-flags '--color=fg:#67e8f9,fg+:#ecfeff,bg:#020617,bg+:#0a2133,hl:#22d3ee,hl+:#06b6d4,info:#22d3ee,prompt:#67e8f9,pointer:#22d3ee,marker:#22d3ee,border:#155e75,header:#67e8f9'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 9: COLOR SYSTEM (NERD FONTS + THEMES)
@@ -586,11 +624,15 @@ _op_render_execution_header() {
   timestamp_ampm=$(date '+%I:%M:%S %p')
   local operator_name="${_OP_CONFIG[operator_name]:-Shadow@Bh4nu 😈💀}"
   local cmd_word=""
-  local safe_command="$(_sanitize_output "$full_command")"
+  local safe_command=""
   local -a tokens
   local token i
   local command_type="COMMAND"
   local cmd_icon="$(_icon processing)"
+
+  # Do not leak sanitizer errors into command output header.
+  safe_command="$(_sanitize_output "$full_command" 2>/dev/null)"
+  [[ -z "$safe_command" ]] && safe_command="$full_command"
 
   # Parse command with shell-like tokenization and skip wrappers/env assignments.
   tokens=("${(z)full_command}")
@@ -1059,8 +1101,16 @@ _validate_url() {
 # Sanitize user input for safe display
 _sanitize_output() {
   local input="$1"
-  # Remove ANSI escape sequences
-  echo "$input" | sed 's/\x1b\[[0-9;]*m//g'
+  local sanitized="$input"
+
+  # Keep header one-line and strip risky control characters.
+  sanitized="${sanitized//$'\n'/ }"
+  sanitized="${sanitized//$'\r'/ }"
+  sanitized="${sanitized//$'\t'/ }"
+  sanitized="${sanitized//$'\e'/}"
+
+  # Remove remaining C0 control bytes and DEL.
+  printf '%s' "$sanitized" | tr -d '\000-\010\013\014\016-\037\177'
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1248,6 +1298,11 @@ safe_system_call() {
   local timeout_duration=${2:-5}
   local fallback_value="${3:-N/A}"
 
+  [[ -n "$cmd" ]] || {
+    printf '%s\n' "$fallback_value"
+    return 1
+  }
+
   if command_exists timeout; then
     timeout "$timeout_duration" zsh -fc "$cmd" 2>/dev/null || printf '%s\n' "$fallback_value"
   else
@@ -1385,6 +1440,11 @@ loading_background() {
   local parent_pid=$$
   local exit_code=1
 
+  if [[ -z "$command" ]]; then
+    echo "Usage: loading_background <message> <command>"
+    return 1
+  fi
+
   {
     local i=0
     local chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -1399,7 +1459,8 @@ loading_background() {
   print -r -- "$spinner_pid" > "$pid_file"
 
   # Secure command execution with validation
-  if [[ ! "$command" =~ ^[a-zA-Z0-9_[:space:]/.-]+$ ]]; then
+  if [[ "$command" == *$'\n'* || "$command" == *$'\r'* ]] || \
+     [[ ! "$command" =~ ^[a-zA-Z0-9_./:@%+=,\ -]+$ ]]; then
     echo "🚨 Security: Unsafe command detected"
     exit_code=1
   else
@@ -1694,7 +1755,7 @@ _zsh_get_cpu_usage() {
     current_stat=($(awk '/^cpu / {print $2+$3+$4+$6+$7+$8, $2+$3+$4+$5+$6+$7+$8, $2, $4, $5, $6, $7, $8}' /proc/stat 2>/dev/null))
   fi
 
-  echo "${current_stat[@]}" > "$stat_file"
+  print -r -- "${current_stat[@]}" >| "$stat_file"
 
   if [[ "$mode" == "detailed" ]]; then
     local delta_total=$((current_stat[1] - last_stat[1]))
@@ -1934,8 +1995,7 @@ _zsh_acquire_lock() {
   start=$(date +%s)
 
   while true; do
-    if ( set -o noclobber; : > "$lock_file" ) 2>/dev/null; then
-      print -r -- "$$" > "$lock_file"
+    if ( set -o noclobber; print -r -- "$$" > "$lock_file" ) 2>/dev/null; then
       return 0
     fi
 
@@ -2019,18 +2079,18 @@ set_cached() {
 
   # Initialize if doesn't exist
   if [[ ! -f "$cache_file" ]]; then
-    printf '{}\n' > "$cache_file"
+    printf '{}\n' >| "$cache_file"
     chmod 600 "$cache_file"
   fi
 
   # Self-heal invalid cache file JSON.
-  jq empty "$cache_file" >/dev/null 2>&1 || printf '{}\n' > "$cache_file"
+  jq empty "$cache_file" >/dev/null 2>&1 || printf '{}\n' >| "$cache_file"
 
   if jq --arg key "$key" \
         --arg value "$value" \
         --argjson expiry "$expiry" \
         '.[$key] = {value: $value, expiry: $expiry}' \
-        "$cache_file" > "$temp_file" 2>/dev/null; then
+        "$cache_file" >| "$temp_file" 2>/dev/null; then
     if mv "$temp_file" "$cache_file"; then
       chmod 600 "$cache_file"
       rc=0
@@ -2303,9 +2363,14 @@ cleanup_processes() {
     rm -f "$pid_file"
   fi
 
-  jobs -p | xargs -r kill -TERM 2>/dev/null
+  local job_pid
+  while IFS= read -r job_pid; do
+    [[ -n "$job_pid" ]] && kill -TERM "$job_pid" 2>/dev/null
+  done < <(jobs -p)
   sleep 0.1
-  jobs -p | xargs -r kill -KILL 2>/dev/null
+  while IFS= read -r job_pid; do
+    [[ -n "$job_pid" ]] && kill -KILL "$job_pid" 2>/dev/null
+  done < <(jobs -p)
 
   tput cnorm 2>/dev/null
   stty echo 2>/dev/null
@@ -2352,7 +2417,7 @@ if command -v fzf &> /dev/null; then
   export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git 2>/dev/null || find . -type f -not -path "*/\.git/*"'
   export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
   export FZF_ALT_C_COMMAND='fd --type d --hidden --follow --exclude .git 2>/dev/null || find . -type d -not -path "*/\.git/*"'
-  export FZF_DEFAULT_OPTS="--height 40% --layout=reverse --border --multi --info=inline --color=bg+:#1e1e1e,bg:#0a0a0a,spinner:#f4a261,hl:#e76f51,fg:#ffffff,header:#e9c46a,info:#264653,pointer:#f4a261,marker:#e76f51,fg+:#ffffff,prompt:#e9c46a,hl+:#e76f51"
+  export FZF_DEFAULT_OPTS="--height 40% --layout=reverse --border --multi --info=inline --color=bg:#020617,bg+:#0a2133,fg:#67e8f9,fg+:#ecfeff,spinner:#22d3ee,hl:#22d3ee,hl+:#06b6d4,header:#67e8f9,info:#38bdf8,pointer:#22d3ee,marker:#22d3ee,prompt:#67e8f9,border:#155e75"
   export FZF_CTRL_T_OPTS="--preview 'bat --style=numbers --color=always --line-range :500 {} 2>/dev/null || cat {}' --preview-window=right:60%"
   export FZF_ALT_C_OPTS="--preview 'tree -C {} 2>/dev/null || ls -la {}' --preview-window=right:60%"
 fi
@@ -2371,18 +2436,18 @@ ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor)
 ZSH_HIGHLIGHT_STYLES[default]=none
 ZSH_HIGHLIGHT_STYLES[unknown-token]=fg=red,bold
 ZSH_HIGHLIGHT_STYLES[reserved-word]=fg=cyan,bold
-ZSH_HIGHLIGHT_STYLES[precommand]=fg=green,underline
-ZSH_HIGHLIGHT_STYLES[commandseparator]=fg=blue,bold
-ZSH_HIGHLIGHT_STYLES[path]=underline
-ZSH_HIGHLIGHT_STYLES[globbing]=fg=blue,bold
-ZSH_HIGHLIGHT_STYLES[history-expansion]=fg=blue,bold
+ZSH_HIGHLIGHT_STYLES[precommand]=fg=cyan,bold
+ZSH_HIGHLIGHT_STYLES[commandseparator]=fg=magenta,bold
+ZSH_HIGHLIGHT_STYLES[path]=fg=cyan,underline
+ZSH_HIGHLIGHT_STYLES[globbing]=fg=cyan,bold
+ZSH_HIGHLIGHT_STYLES[history-expansion]=fg=magenta,bold
 ZSH_HIGHLIGHT_STYLES[single-hyphen-option]=fg=cyan
 ZSH_HIGHLIGHT_STYLES[double-hyphen-option]=fg=cyan
-ZSH_HIGHLIGHT_STYLES[single-quoted-argument]=fg=yellow
-ZSH_HIGHLIGHT_STYLES[double-quoted-argument]=fg=yellow
-ZSH_HIGHLIGHT_STYLES[redirection]=fg=blue,bold
-ZSH_HIGHLIGHT_STYLES[comment]=fg=black,bold
-ZSH_HIGHLIGHT_STYLES[arg0]=fg=green
+ZSH_HIGHLIGHT_STYLES[single-quoted-argument]=fg=blue
+ZSH_HIGHLIGHT_STYLES[double-quoted-argument]=fg=blue
+ZSH_HIGHLIGHT_STYLES[redirection]=fg=magenta,bold
+ZSH_HIGHLIGHT_STYLES[comment]=fg=242
+ZSH_HIGHLIGHT_STYLES[arg0]=fg=cyan,bold
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 22: SECURITY & OPERATIONAL CONTEXT
@@ -2403,7 +2468,8 @@ initialize_integrity_baseline() {
   )
 
   mkdir -p "$(dirname "$INTEGRITY_BASELINE_FILE")"
-  echo "# Zsh File Integrity Baseline - $(date)" > "$INTEGRITY_BASELINE_FILE"
+  : > "$INTEGRITY_BASELINE_FILE"
+  chmod 600 "$INTEGRITY_BASELINE_FILE"
 
   for file in "${files_to_check[@]}"; do
     [[ -r "$file" ]] && sha256sum "$file" >> "$INTEGRITY_BASELINE_FILE"
@@ -2422,6 +2488,17 @@ check_fs_integrity() {
 
   echo "🔍 Checking file system integrity..."
   local has_warnings=false
+  local check_file
+
+  mkdir -p "$XDG_CACHE_HOME/zsh"
+  check_file=$(mktemp "$XDG_CACHE_HOME/zsh/integrity_check.XXXXXX") || return 1
+  awk '$1 ~ /^[0-9a-fA-F]{64}$/ {print $0}' "$INTEGRITY_BASELINE_FILE" > "$check_file"
+
+  if [[ ! -s "$check_file" ]]; then
+    echo "⚠️ Baseline has no valid checksum lines. Recreate with: sec-baseline"
+    rm -f "$check_file"
+    return 1
+  fi
 
   while IFS= read -r line; do
     case "$line" in
@@ -2434,7 +2511,8 @@ check_fs_integrity() {
         has_warnings=true
         ;;
     esac
-  done < <(sha256sum -c "$INTEGRITY_BASELINE_FILE" 2>&1)
+  done < <(sha256sum -c "$check_file" 2>&1)
+  rm -f "$check_file"
 
   if ! $has_warnings; then
     echo "✅ All checked files are intact."
@@ -2450,7 +2528,7 @@ check_network_anomalies() {
   fi
 
   printf "\nUnusual Listening Ports:\n"
-  ss -tlpn 2>/dev/null | awk 'NR>1 {print $4}' | grep -E ':[0-9]+$' | cut -d':' -f2 | sort -un | while read port; do
+  ss -tlpn 2>/dev/null | awk 'NR>1 {print $4}' | grep -E ':[0-9]+$' | cut -d':' -f2 | sort -un | while read -r port; do
     if ! grep -qwE "^\w+\s+${port}/(tcp|udp)" /etc/services 2>/dev/null; then
       echo "  - Unusual port: $port"
     fi
@@ -2676,7 +2754,6 @@ _zsh_log_command_to_history() {
   echo "$PWD|$1" >> "$_ZSH_AI_HISTORY_FILE"
 }
 
-autoload -Uz add-zsh-hook
 add-zsh-hook preexec _zsh_log_command_to_history
 
 suggest() {
@@ -3941,7 +4018,8 @@ export PATH
 # ═══════════════════════════════════════════════════════════════════════════
 
 ulimit -c 0
-umask 022
+# Safer default file permissions for operator workflows.
+umask 027
 alias chmod='command chmod'
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -4628,33 +4706,34 @@ _op_precmd() {
         _draw_gradient_border() {
             local width=$1
             local style="$2"
+            local i progress r g b
 
             # Left cap (white)
             printf "\033[38;2;255;255;255m─"
 
             for ((i=1; i<width-1; i++)); do
                 # Simple static gradient based on position
-                local progress=$((i * 100 / (width - 1)))
+                progress=$((i * 100 / (width - 1)))
 
                 # Different gradient styles based on error type
                 case "$style" in
                     "critical")
                         # Deep red gradient
-                        local r=$((255 - progress / 4))
-                        local g=$((50 - progress / 8))
-                        local b=$((50 - progress / 8))
+                        r=$((255 - progress / 4))
+                        g=$((50 - progress / 8))
+                        b=$((50 - progress / 8))
                         ;;
                     "warning")
                         # Orange-yellow gradient
-                        local r=255
-                        local g=$((200 - progress / 5))
-                        local b=$((50 + progress / 10))
+                        r=255
+                        g=$((200 - progress / 5))
+                        b=$((50 + progress / 10))
                         ;;
                     "flame"|*)
                         # Default flame gradient
-                        local r=$((255 - progress / 6))
-                        local g=$((140 - progress / 10))
-                        local b=0
+                        r=$((255 - progress / 6))
+                        g=$((140 - progress / 10))
+                        b=0
                         ;;
                 esac
 
