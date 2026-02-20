@@ -1,4 +1,12 @@
 #!/usr/bin/env zsh
+# shellcheck disable=all
+# noinspection ALL
+# noinspection Typo
+# noinspection SpellCheckingInspection
+# noinspection GrazieInspection
+# cspell:disable
+# cspell:disable-file
+# spell-checker:disable
 # ═══════════════════════════════════════════════════════════════════════════
 # 🚀 Shadow@Bhanu Elite Terminal Environment v4.2.1 ULTIMATE HYBRID 🚀
 # ═══════════════════════════════════════════════════════════════════════════
@@ -55,7 +63,7 @@ export EDITOR="nvim"
 export VISUAL="nvim"
 export PAGER="less"
 export BROWSER="firefox"
-export MANPAGER="sh -c 'col -bx | bat -l man -p'"
+export MANPAGER="sh -c 'col -bx | batcat -l man -p'"
 
 # XDG Base Directory Specification
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -189,7 +197,7 @@ autoload -Uz zmv
 _zsh_load_p10k_prompt() {
   [[ "$ENABLE_STARSHIP" == "true" ]] && return 0
 
-  local prompt_file="${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+  local prompt_file="${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${USER}.zsh"
   [[ -r "$prompt_file" && -f "$prompt_file" ]] || return 1
 
   # Basic security validation
@@ -210,7 +218,7 @@ _zsh_load_p10k_prompt
 ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
 
 if [[ ! -d "$ZINIT_HOME" ]]; then
-  mkdir -p "$(dirname $ZINIT_HOME)"
+  mkdir -p "$(dirname "$ZINIT_HOME")"
   git clone https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME"
 fi
 
@@ -227,7 +235,7 @@ _zsh_lazy_load_plugins() {
   [[ "$ENABLE_ASYNC_LOADING" != true ]] && return
 
   # Remove self from precmd to prevent re-execution
-  precmd_functions=(${precmd_functions#_zsh_lazy_load_plugins})
+  precmd_functions=(${precmd_functions:#_zsh_lazy_load_plugins})
 
   # Load completion first (blocking, required dependency)
   zinit ice lucid wait'0' \
@@ -258,14 +266,32 @@ precmd_functions+=(_zsh_lazy_load_plugins)
 # ═══════════════════════════════════════════════════════════════════════════
 
 autoload -Uz compinit
-zcompdump_path="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump-${ZSH_VERSION}"
-mkdir -p "$(dirname "$zcompdump_path")"
+_zsh_init_completion_cache() {
+  local zcompdump_path="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump-${ZSH_VERSION}"
+  local cache_max_age=86400
+  local now mtime refresh=true
 
-if [[ -n ${zcompdump_path}(#qN.mh+24) ]]; then
-  compinit -d "${zcompdump_path}"
-else
-  compinit -C -d "${zcompdump_path}"
-fi
+  mkdir -p "$(dirname "$zcompdump_path")"
+
+  if [[ -f "$zcompdump_path" ]]; then
+    now=${EPOCHSECONDS:-$(date +%s)}
+    mtime=$(stat -c %Y "$zcompdump_path" 2>/dev/null || stat -f %m "$zcompdump_path" 2>/dev/null || echo 0)
+    if [[ -z "$mtime" || "$mtime" == *[^0-9]* ]]; then
+      mtime=0
+    fi
+
+    if (( now - mtime < cache_max_age )); then
+      refresh=false
+    fi
+  fi
+
+  if [[ "$refresh" == true ]]; then
+    compinit -d "$zcompdump_path"
+  else
+    compinit -C -d "$zcompdump_path"
+  fi
+}
+_zsh_init_completion_cache
 
 # Completion styling
 zstyle ':completion:*' completer _expand _complete _ignored _approximate
@@ -278,7 +304,7 @@ zstyle ':completion:*' select-prompt '%SScrolling active: current selection at %
 zstyle ':completion:*' use-compctl false
 zstyle ':completion:*' verbose true
 zstyle ':completion:*' squeeze-slashes true
-zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+zstyle ':completion:*' list-colors "${LS_COLORS}"
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*' format '%F{yellow}%d%f'
 zstyle ':completion:*' special-dirs true
@@ -352,6 +378,7 @@ icon() {
 typeset -gA _OP_CONFIG
 _OP_CONFIG[exec_prefix]="🧠"
 _OP_CONFIG[exec_tag]="[OP-EXEC]"
+_OP_CONFIG[operator_name]="Shadow@Bh4nu 😈💀"
 _OP_CONFIG[divider_char]="─"
 _OP_CONFIG[divider_width]=64
 _OP_CONFIG[show_command]=true
@@ -359,6 +386,9 @@ _OP_CONFIG[show_divider]=true
 _OP_CONFIG[show_context]=true
 _OP_CONFIG[show_output_separator]=true
 _OP_CONFIG[output_separator_char]="━"
+_OP_CONFIG[separator_color]="38;2;255;105;180"  # Pink
+_OP_CONFIG[show_auth_banner]=true
+_OP_CONFIG[auth_banner_text]="⚠😒 AUTHENTICATION REQUIRED [OPS_Junior🫩] --- Enter password 🙄 | Failure = SYSTEM BREAK 🤬"
 _OP_CONFIG[gradient_effects]=true
 _OP_CONFIG[enhanced_errors]=true
 _OP_CONFIG[session_tracking]=true
@@ -455,126 +485,204 @@ _op_notify() {
     "$message"
 }
 
+# Build separator text safely for any UTF-8 character.
+_op_build_separator() {
+  local width="${1:-64}"
+  local char="${2:-━}"
+  local out=""
+  local i
+
+  [[ "$width" =~ ^[0-9]+$ ]] || width=64
+  (( width < 1 )) && width=64
+
+  for ((i=0; i<width; i++)); do
+    out+="$char"
+  done
+
+  print -r -- "$out"
+}
+
+_op_render_auth_banner() {
+  [[ "${_OP_CONFIG[show_auth_banner]:-true}" != "true" ]] && return 0
+
+  local _w="${_OP_CONFIG[divider_width]:-64}"
+  local _c="${_OP_CONFIG[output_separator_char]:-━}"
+  local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
+  local _msg="${_OP_CONFIG[auth_banner_text]:-⚠😒 AUTHENTICATION REQUIRED [OPS_Junior 🫩] --- Enter password 🙄 | Failure = SYSTEM BREAK 🤬}"
+
+  printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
+  printf "\033[${_color}m%s\033[0m\n" "$_msg"
+}
+
+# Wrapper around sudo to show an operator auth banner only when password is required.
+sudo() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      -n|--non-interactive|-S|--stdin|-A|--askpass|-k|-K|--reset-timestamp|--remove-timestamp)
+        command sudo "$@"
+        return $?
+        ;;
+    esac
+  done
+
+  if [[ ! -t 0 || ! -t 1 || "${_OP_CONFIG[show_auth_banner]:-true}" != "true" ]]; then
+    command sudo "$@"
+    return $?
+  fi
+
+  # If sudo has a valid cached timestamp, execute directly.
+  if command sudo -n true 2>/dev/null; then
+    command sudo "$@"
+    return $?
+  fi
+
+  _op_render_auth_banner
+
+  # Prompt once, then run command without another prompt.
+  command sudo -v
+  local auth_rc=$?
+  (( auth_rc != 0 )) && return "$auth_rc"
+
+  local _w="${_OP_CONFIG[divider_width]:-64}"
+  local _c="${_OP_CONFIG[output_separator_char]:-━}"
+  local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
+  printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
+
+  command sudo -n "$@"
+}
+
 # === ADVANCED EXECUTION HEADER RENDERER ===
 _op_render_execution_header() {
   local full_command="$1"
-  local timestamp=$(date '+%H:%M:%S')
-  local working_dir="${PWD/#$HOME/\~}"
+  local timestamp_ampm
+  timestamp_ampm=$(date '+%I:%M:%S %p')
+  local operator_name="${_OP_CONFIG[operator_name]:-Shadow@Bh4nu 😈💀}"
+  local cmd_word="${full_command%%[[:space:]]*}"
+  cmd_word="${cmd_word##*/}"
+  cmd_word="${cmd_word:l}"
   local command_type="COMMAND"
+  local cmd_icon="$(_icon processing)"
 
-  # Enhanced command type detection with more categories
-  case "$full_command" in
-    # PRIVILEGED OPERATIONS
-    sudo*|doas*|pkexec*) command_type="ELEVATED COMMAND" ;;
-    # SECURITY & RECONNAISSANCE
-    nmap*|gobuster*|nikto*|masscan*|dirb*|dirsearch*|wfuzz*|hydra*|burp*|sqlmap*|metasploit*) command_type="SECURITY/RECON COMMAND" ;;
-    # PROGRAMMING LANGUAGES
-    python*|python3*|node*|npm*|yarn*|go*|java*|javac*|ruby*|gem*|perl*|php*|composer*|rust*|cargo*|c++|g++|gcc*|clang*) command_type="DEVELOPMENT COMMAND" ;;
-    # CLOUD & DEVOPS
-    docker*|kubectl*|helm*|terraform*|ansible*|puppet*|chef*|kops*|eksctl*|gcloud*|az*|aws*) command_type="CLOUD/DEVOPS COMMAND" ;;
-    # VERSION CONTROL
-    git*|svn*|hg*|bzr*|cvs*) command_type="VERSION CONTROL COMMAND" ;;
-    # AI & MACHINE LEARNING
-    ai*|chatgpt*|claude*|gemini*|bard*|copilot*|ollama*|huggingface*|tensorflow*|pytorch*|scikit*|pandas*|numpy*) command_type="AI/MACHINE LEARNING COMMAND" ;;
-    # NETWORK & COMMUNICATIONS
-    curl*|wget*|http*|ssh*|rsync*|scp*|sftp*|ftp*|telnet*|netcat*|nc*|nmap*|ping*|traceroute*|dig*|nslookup*|host*) command_type="NETWORK/COMMUNICATIONS COMMAND" ;;
-    # TEXT EDITORS & IDES
-    vim*|nvim*|vi*|emacs*|nano*|code*|subl*|atom*|vscode*|intellij*|pycharm*|webstorm*) command_type="TEXT EDITOR/IDE COMMAND" ;;
-    # BUILD SYSTEMS & COMPILERS
-    make*|cmake*|meson*|ninja*|bazel*|buck*|gradle*|maven*|ant*|webpack*|rollup*|vite*|parcel*) command_type="BUILD SYSTEMS COMMAND" ;;
-    # PACKAGE MANAGERS
-    apt*|apt-get*|dpkg*|yum*|dnf*|rpm*|pacman*|yaourt*|yay*|brew*|port*|pkg*|snap*|flatpak*|pip*|npm*|yarn*|gem*|cargo*) command_type="PACKAGE MANAGEMENT COMMAND" ;;
-    # SYSTEM ADMINISTRATION
-    systemctl*|service*|journalctl*|crontab*|top*|htop*|ps*|kill*|killall*|nice*|renice*|nohup*|screen*|tmux*) command_type="SYSTEM ADMINISTRATION COMMAND" ;;
-    # FILE & DATA OPERATIONS
-    find*|grep*|sed*|awk*|sort*|uniq*|cut*|tr*|wc*|head*|tail*|cat*|less*|more*|tar*|zip*|unzip*|gzip*|gunzip*) command_type="FILE/DATA OPERATIONS COMMAND" ;;
-    # DATABASE OPERATIONS
-    mysql*|postgresql*|psql*|sqlite*|mongo*|redis*|elasticsearch*|cassandra*|oracle*|sqlplus*) command_type="DATABASE OPERATIONS COMMAND" ;;
-    # WEB DEVELOPMENT
-    http-server*|node*|live-server*|webpack-dev-server*|vite*|next*|react-scripts*|angular-cli*) command_type="WEB DEVELOPMENT COMMAND" ;;
-    # MONITORING & LOGGING
-    tail*|less*|more*|journalctl*|dmesg*|syslog*|klog*|dmesg*|lsof*|netstat*|ss*|iotop*|iftop*|nethogs*) command_type="MONITORING/LOGGING COMMAND" ;;
-    # MULTIMEDIA & GRAPHICS
-    ffmpeg*|avconv*|convert*|identify*|display*|eog*|feh*|gimp*|inkscape*|blender*|kdenlive*|obs*) command_type="MULTIMEDIA/GRAPHICS COMMAND" ;;
-    # VIRTUALIZATION & CONTAINERS
-    virtualbox*|vbox*|vmware*|kvm*|qemu*|libvirt*|docker*|podman*|lxc*|lxd*) command_type="VIRTUALIZATION/CONTAINERS COMMAND" ;;
-    # SECURITY TOOLS
-    wireshark*|tcpdump*|tshark*|aircrack-ng*|hashcat*|john*|hydra*|metasploit*|burp*|sqlmap*) command_type="SECURITY TOOLS COMMAND" ;;
-    # DOCUMENTATION & HELP
-    man*|info*|help*|tldr*|cheat*|howdoi*|explainshell*) command_type="DOCUMENTATION/HELP COMMAND" ;;
-    # NAVIGATION & SHELL OPERATIONS
-    cd*|pwd*|ls*|la*|ll*|tree*|find*|which*|whereis*|type*|whatis*|apropos*) command_type="NAVIGATION/SHELL COMMAND" ;;
-    # ARCHIVE & COMPRESSION
-    tar*|zip*|unzip*|gzip*|gunzip*|bzip2*|bunzip2*|xz*|unxz*|7z*|p7zip*|rar*|unrar*) command_type="ARCHIVE/COMPRESSION COMMAND" ;;
-    # PROCESS MANAGEMENT
-    ps*|top*|htop*|kill*|killall*|nice*|renice*|jobs*|fg*|bg*|disown*|nohup*) command_type="PROCESS MANAGEMENT COMMAND" ;;
-    # HARDWARE & SYSTEM INFO
-    lscpu*|lsmem*|lsblk*|fdisk*|df*|du*|free*|uname*|lspci*|lsusb*|sensors*|acpi*|dmidecode*) command_type="HARDWARE/SYSTEM INFO COMMAND" ;;
-    # NETWORK CONFIGURATION
-    ip*|ifconfig*|route*|iptables*|ufw*|firewalld*|netplan*|nmcli*|iwconfig*|iwlist*) command_type="NETWORK CONFIGURATION COMMAND" ;;
-    # DEVELOPMENT TOOLS
-    git*|make*|cmake*|gcc*|g++||python*|node*|npm*|docker*|kubectl*|vim*|nvim*|code*|vscode*) command_type="DEVELOPMENT TOOLS COMMAND" ;;
-    # FILE TRANSFER
-    scp*|rsync*|sftp*|ftp*|wget*|curl*|aria2c*|rclone*|lftp*) command_type="FILE TRANSFER COMMAND" ;;
-    # SYSTEM SERVICES
-    systemctl*|service*|init*|rc*|upstart*|systemd*|cron*|crontab*) command_type="SYSTEM SERVICES COMMAND" ;;
-    # SECURITY AUDITING
-    auditd*|ausearch*|aureport*|fail2ban*|ufw*|iptables*|nftables*|selinux*) command_type="SECURITY AUDITING COMMAND" ;;
-    # PERFORMANCE MONITORING
-    perf*|strace*|ltrace*|valgrind*|gdb*|lldb*|time*|timeout*) command_type="PERFORMANCE MONITORING COMMAND" ;;
-    # BACKUP & RECOVERY
-    rsync*|tar*|dd*|clone*|backup*|restore*|dump*|import*|export*) command_type="BACKUP/RECOVERY COMMAND" ;;
-    # SHELL SCRIPTING
-    bash*|sh*|zsh*|fish*|ksh*|csh*|tcsh*|source*|exec*|eval*) command_type="SHELL SCRIPTING COMMAND" ;;
-    # DEFAULT COMMAND
-    *) command_type="COMMAND" ;;
-  esac
-
-  # Dynamic icon selection based on command type
-  local cmd_icon
-  case "$command_type" in
-    "ELEVATED") cmd_icon="$(_icon elevated)" ;;
-    "SECURITY/RECON") cmd_icon="$(_icon recon)" ;;
-    "AI/MACHINE LEARNING") cmd_icon="$(_icon ai_exec)" ;;
-    "NETWORK/COMMUNICATIONS") cmd_icon="$(_icon scanning)" ;;
-    "TEXT EDITOR/IDE") cmd_icon="$(_icon processing)" ;;
-    "BUILD SYSTEMS") cmd_icon="$(_icon computing)" ;;
-    "SYSTEM ADMINISTRATION") cmd_icon="$(_icon secure)" ;;
-    "FILE/DATA OPERATIONS") cmd_icon="$(_icon analyzing)" ;;
-    "PACKAGE MANAGEMENT") cmd_icon="$(_icon processing)" ;;
-    "DATABASE OPERATIONS") cmd_icon="$(_icon computing)" ;;
-    "WEB DEVELOPMENT") cmd_icon="$(_icon processing)" ;;
-    "MONITORING/LOGGING") cmd_icon="$(_icon analyzing)" ;;
-    "MULTIMEDIA/GRAPHICS") cmd_icon="$(_icon processing)" ;;
-    "VIRTUALIZATION/CONTAINERS") cmd_icon="$(_icon cloud)" ;;
-    "SECURITY TOOLS") cmd_icon="$(_icon recon)" ;;
-    "DOCUMENTATION/HELP") cmd_icon="$(_icon processing)" ;;
-    "NAVIGATION/SHELL") cmd_icon="$(_icon executing)" ;;
-    "ARCHIVE/COMPRESSION") cmd_icon="$(_icon processing)" ;;
-    "PROCESS MANAGEMENT") cmd_icon="$(_icon secure)" ;;
-    "HARDWARE/SYSTEM INFO") cmd_icon="$(_icon analyzing)" ;;
-    "NETWORK CONFIGURATION") cmd_icon="$(_icon scanning)" ;;
-    "DEVELOPMENT TOOLS") cmd_icon="$(_icon dev)" ;;
-    "FILE TRANSFER") cmd_icon="$(_icon scanning)" ;;
-    "SYSTEM SERVICES") cmd_icon="$(_icon secure)" ;;
-    "SECURITY AUDITING") cmd_icon="$(_icon recon)" ;;
-    "PERFORMANCE MONITORING") cmd_icon="$(_icon analyzing)" ;;
-    "BACKUP/RECOVERY") cmd_icon="$(_icon processing)" ;;
-    "SHELL SCRIPTING") cmd_icon="$(_icon executing)" ;;
+  # Command classification based on the first token.
+  case "$cmd_word" in
+    sudo|doas|pkexec)
+      command_type="ELEVATED COMMAND"
+      cmd_icon="$(_icon elevated)"
+      ;;
+    nmap|gobuster|nikto|masscan|dirb|dirsearch|wfuzz|hydra|burpsuite|sqlmap|metasploit|msfconsole|searchsploit|enum4linux|ffuf|wpscan|amass|whatweb|netexec|crackmapexec|responder|tcpdump|wireshark|tshark|aircrack-ng|hashcat|john)
+      command_type="SECURITY/RECON COMMAND"
+      cmd_icon="$(_icon recon)"
+      ;;
+    ai|chatgpt|claude|gemini|bard|copilot|ollama|huggingface)
+      command_type="AI/MACHINE LEARNING COMMAND"
+      cmd_icon="$(_icon ai_exec)"
+      ;;
+    python|python3|node|go|java|javac|ruby|perl|php|rustc|cargo|gcc|g++|clang|clang++|make|cmake|meson|ninja|bazel|buck|gradle|mvn|maven|ant|webpack|rollup|vite|parcel)
+      command_type="DEVELOPMENT COMMAND"
+      cmd_icon="$(_icon dev)"
+      ;;
+    docker|kubectl|helm|terraform|ansible|puppet|chef|kops|eksctl|gcloud|az|aws|podman|lxc|lxd)
+      command_type="CLOUD/DEVOPS COMMAND"
+      cmd_icon="$(_icon cloud)"
+      ;;
+    git|svn|hg|bzr|cvs)
+      command_type="VERSION CONTROL COMMAND"
+      cmd_icon="$(_icon version)"
+      ;;
+    curl|wget|http|ssh|rsync|scp|sftp|ftp|telnet|netcat|nc|ncat|socat|ping|traceroute|dig|nslookup|host|aria2c|rclone|lftp)
+      command_type="NETWORK/COMMUNICATIONS COMMAND"
+      cmd_icon="$(_icon scanning)"
+      ;;
+    vim|nvim|vi|emacs|nano|code|codium|subl|atom|vscode|intellij|pycharm|webstorm)
+      command_type="TEXT EDITOR/IDE COMMAND"
+      cmd_icon="$(_icon processing)"
+      ;;
+    apt|apt-get|dpkg|yum|dnf|rpm|pacman|yaourt|yay|brew|port|pkg|snap|flatpak|pip|pip3|npm|yarn|gem|composer)
+      command_type="PACKAGE MANAGEMENT COMMAND"
+      cmd_icon="$(_icon processing)"
+      ;;
+    systemctl|service|journalctl|loginctl|crontab)
+      command_type="SYSTEM ADMINISTRATION COMMAND"
+      cmd_icon="$(_icon secure)"
+      ;;
+    find|grep|sed|awk|sort|uniq|cut|tr|wc|head|tail|cat|bat|jq|less|more)
+      command_type="FILE/DATA OPERATIONS COMMAND"
+      cmd_icon="$(_icon analyzing)"
+      ;;
+    mysql|postgres|postgresql|psql|sqlite|sqlite3|mongo|mongosh|redis-cli|elasticsearch|cassandra|cqlsh|oracle|sqlplus)
+      command_type="DATABASE OPERATIONS COMMAND"
+      cmd_icon="$(_icon computing)"
+      ;;
+    ffmpeg|avconv|convert|identify|display|eog|feh|gimp|inkscape|blender|kdenlive|obs)
+      command_type="MULTIMEDIA/GRAPHICS COMMAND"
+      cmd_icon="$(_icon processing)"
+      ;;
+    virtualbox|vboxmanage|vmware|kvm|qemu|libvirt|virsh)
+      command_type="VIRTUALIZATION/CONTAINERS COMMAND"
+      cmd_icon="$(_icon cloud)"
+      ;;
+    man|info|help|tldr|cheat|howdoi|explainshell)
+      command_type="DOCUMENTATION/HELP COMMAND"
+      cmd_icon="$(_icon info)"
+      ;;
+    cd|pwd|ls|la|ll|tree|which|whereis|type|whatis|apropos)
+      command_type="NAVIGATION/SHELL COMMAND"
+      cmd_icon="$(_icon executing)"
+      ;;
+    tar|zip|unzip|gzip|gunzip|bzip2|bunzip2|xz|unxz|7z|p7zip|rar|unrar|zstd|unzstd)
+      command_type="ARCHIVE/COMPRESSION COMMAND"
+      cmd_icon="$(_icon processing)"
+      ;;
+    ps|top|htop|kill|killall|nice|renice|jobs|fg|bg|disown|nohup|screen|tmux)
+      command_type="PROCESS MANAGEMENT COMMAND"
+      cmd_icon="$(_icon secure)"
+      ;;
+    lscpu|lsmem|lsblk|fdisk|df|du|free|uname|lspci|lsusb|sensors|acpi|dmidecode)
+      command_type="HARDWARE/SYSTEM INFO COMMAND"
+      cmd_icon="$(_icon analyzing)"
+      ;;
+    ip|ifconfig|route|iptables|ufw|firewalld|firewall-cmd|nft|netplan|nmcli|iwconfig|iwlist)
+      command_type="NETWORK CONFIGURATION COMMAND"
+      cmd_icon="$(_icon scanning)"
+      ;;
+    init|rc|upstart|systemd|cron)
+      command_type="SYSTEM SERVICES COMMAND"
+      cmd_icon="$(_icon secure)"
+      ;;
+    auditd|ausearch|aureport|fail2ban|nftables|selinux|setenforce|getenforce)
+      command_type="SECURITY AUDITING COMMAND"
+      cmd_icon="$(_icon recon)"
+      ;;
+    perf|strace|ltrace|valgrind|gdb|lldb|time|timeout)
+      command_type="PERFORMANCE MONITORING COMMAND"
+      cmd_icon="$(_icon analyzing)"
+      ;;
+    dd|clone|clonezilla|backup|restore|dump|import|export|borg|restic|rsnapshot)
+      command_type="BACKUP/RECOVERY COMMAND"
+      cmd_icon="$(_icon processing)"
+      ;;
+    bash|sh|zsh|fish|ksh|csh|tcsh|source|exec|eval)
+      command_type="SHELL SCRIPTING COMMAND"
+      cmd_icon="$(_icon executing)"
+      ;;
   esac
 
   # Command execution header with tactical styling
-  printf "\033[38;2;0;255;255m%s [%s] %s ➜ %s\033[0m\n" \
-    "$(_icon ai)" \
+  printf "\033[38;2;0;255;255m%s - %s %s - %s - %s\033[0m\n" \
+    "$operator_name" \
+    "$cmd_icon" \
     "$command_type" \
-    "$timestamp" \
+    "$timestamp_ampm" \
     "$full_command"
 
   # Clean separator
   if [[ "${_OP_CONFIG[show_divider]}" == "true" ]]; then
-    printf "\033[38;2;60;60;60m"
-    printf "%*s" "${_OP_CONFIG[divider_width]}" "" | tr ' ' "━"
-    printf "\033[0m\n"
+    local _w="${_OP_CONFIG[divider_width]:-64}"
+    local _c="${_OP_CONFIG[output_separator_char]:-━}"
+    local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
+    printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
   fi
 }
 
@@ -586,6 +694,7 @@ operator_config() {
   case "$setting" in
     exec_prefix) _OP_CONFIG[exec_prefix]="$value" ;;
     exec_tag)   _OP_CONFIG[exec_tag]="$value" ;;
+    operator_name) _OP_CONFIG[operator_name]="$value" ;;
     show_command)
       if [[ "$value" == true || "$value" == false ]]; then
         _OP_CONFIG[show_command]="$value"
@@ -596,10 +705,22 @@ operator_config() {
         _OP_CONFIG[show_divider]="$value"
       fi
       ;;
+    show_auth_banner)
+      if [[ "$value" == true || "$value" == false ]]; then
+        _OP_CONFIG[show_auth_banner]="$value"
+      fi
+      ;;
+    auth_banner_text) _OP_CONFIG[auth_banner_text]="$value" ;;
+    separator_color) _OP_CONFIG[separator_color]="$value" ;;
     *)
-      echo "Available settings: exec_prefix, exec_tag, show_command, show_divider"
+      echo "Available settings: exec_prefix, exec_tag, operator_name, show_command, show_divider, show_auth_banner, auth_banner_text, separator_color"
       echo "Current config:"
-      for key in "${(@k)_OP_CONFIG}"; do
+      local -a op_keys=(
+        exec_prefix exec_tag operator_name divider_char divider_width show_command show_divider show_context
+        show_output_separator output_separator_char separator_color show_auth_banner auth_banner_text gradient_effects
+        enhanced_errors session_tracking
+      )
+      for key in "${op_keys[@]}"; do
         printf "  %s: %s\n" "$key" "${_OP_CONFIG[$key]}"
       done
       ;;
@@ -608,12 +729,17 @@ operator_config() {
 
 # === OPERATOR STATUS DISPLAY ===
 operator_status() {
+  local -a op_keys=(
+    exec_prefix exec_tag operator_name divider_char divider_width show_command show_divider show_context
+    show_output_separator output_separator_char separator_color show_auth_banner auth_banner_text
+    gradient_effects enhanced_errors session_tracking
+  )
   echo "🧠 Operator Console Status"
   echo "═════════════════════════════"
   echo "Mode: $(whoami)@$(hostname)"
   echo "Shell: Zsh $ZSH_VERSION"
   echo "Session: $(date '+%Y-%m-%d %H:%M:%S')"
-  echo "Config: $(operator_config | wc -l) active settings"
+  echo "Config: ${#op_keys[@]} active settings"
   echo "Status: OPERATIONAL"
 }
 
@@ -702,7 +828,7 @@ rotate_audit_logs() {
     if [[ -f "$log" ]] && [[ $(stat -f%z "$log" 2>/dev/null || stat -c%s "$log" 2>/dev/null) -gt $max_size ]]; then
       local archive="${log}.$(date +%Y%m%d_%H%M%S).gz"
       gzip -c "$log" > "$archive"
-      > "$log"  # Truncate
+      : > "$log"  # Truncate
       echo "📦 Rotated: $archive"
     fi
   done
@@ -1051,11 +1177,27 @@ safe_system_call() {
   local fallback_value="${3:-N/A}"
 
   if command_exists timeout; then
-    # Use eval to handle complex commands with arguments safe from splitting issues
-    timeout "$timeout_duration" zsh -c "$cmd" 2>/dev/null || echo "$fallback_value"
+    timeout "$timeout_duration" zsh -fc "$cmd" 2>/dev/null || printf '%s\n' "$fallback_value"
   else
-    eval "$cmd" 2>/dev/null || echo "$fallback_value"
+    zsh -fc "$cmd" 2>/dev/null || printf '%s\n' "$fallback_value"
   fi
+}
+
+_repeat_char() {
+  local count="${1:-0}"
+  local char="${2:- }"
+  local out=""
+  local i
+
+  if [[ -z "$count" || "$count" == *[^0-9]* ]]; then
+    count=0
+  fi
+
+  for ((i=0; i<count; i++)); do
+    out+="$char"
+  done
+
+  printf '%s' "$out"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1096,7 +1238,7 @@ loading_animation() {
     "38;2;0;140;0"
   )
 
-  local msg_color="${gradient[0]}"
+  local msg_color="${gradient[1]}"
   echo -e "\033[${msg_color};1m$message\033[0m"
 
   local start_time=$(date +%s)
@@ -1146,6 +1288,7 @@ loading_animation() {
 
 # Multi-stage loading
 loading_multi_stage() {
+  setopt localoptions ksharrays
   local -a stages=("$@")
   local total_stages=${#stages[@]}
 
@@ -1311,7 +1454,7 @@ matrix_rain() {
   esac
   local num_colors=${#colors[@]}
 
-  declare -a columns lengths speeds intensities
+  local -a columns lengths speeds intensities
   local active_columns=$((width * density / 100))
   [[ $active_columns -lt 1 ]] && active_columns=1
 
@@ -1355,7 +1498,7 @@ matrix_rain() {
         for ((j=0; j<col_len; j++)); do
           local y_pos=$((col_pos - j))
 
-          if [[ y_pos -ge 0 && y_pos -lt height ]]; then
+          if [[ $y_pos -ge 0 && $y_pos -lt height ]]; then
             local color_idx=$(( (j * (num_colors - 1)) / col_len ))
             color_idx=$((color_idx >= num_colors ? num_colors - 1 : color_idx))
 
@@ -1366,7 +1509,7 @@ matrix_rain() {
           fi
         done
 
-        if [[ col_pos -ge 0 && col_pos -lt height ]]; then
+        if [[ $col_pos -ge 0 && $col_pos -lt height ]]; then
           local lead_char=$(( (col_pos + i + frame_count * 2) % num_chars ))
           frame_buffer+="\033[$((col_pos + 1));$((i + 1))H\033[1;${colors[0]}m${chars:$lead_char:1}"
         fi
@@ -1432,13 +1575,14 @@ _zsh_init_cpu_monitor() {
 }
 
 _zsh_cleanup_cpu_history() {
+  setopt localoptions ksharrays
   # Keep only last N entries to prevent memory leaks
   local current_size=${#_ZSH_CPU_TIMESTAMPS[@]}
   if [[ $current_size -gt $_ZSH_CPU_MAX_HISTORY ]]; then
     local trim_count=$((current_size - _ZSH_CPU_MAX_HISTORY))
-    _ZSH_CPU_TIMESTAMPS=("${_ZSH_CPU_TIMESTAMPS[@]:$trim_count}")
     # Clean history keys accordingly
     local -a keys_to_remove=("${_ZSH_CPU_TIMESTAMPS[@]:0:$trim_count}")
+    _ZSH_CPU_TIMESTAMPS=("${_ZSH_CPU_TIMESTAMPS[@]:$trim_count}")
     for key in "${keys_to_remove[@]}"; do
       unset "_ZSH_CPU_HISTORY[$key]"
     done
@@ -1446,6 +1590,7 @@ _zsh_cleanup_cpu_history() {
 }
 
 _zsh_get_cpu_usage() {
+  setopt localoptions ksharrays
   local mode="${1:-total}"
   local stat_file="$XDG_CACHE_HOME/zsh/cpu_last_stat"
 
@@ -1502,7 +1647,7 @@ _zsh_get_cpu_usage() {
     local delta_busy=$((current_stat[0] - last_stat[0]))
 
     if [[ $delta_total -gt 0 ]]; then
-      printf "%.1f" $(echo "$delta_busy $delta_total" | awk '{print 100 * $1 / $2}')
+      printf "%.1f" "$((100.0 * delta_busy / delta_total))"
     else
       echo "0.0"
     fi
@@ -1581,6 +1726,7 @@ _zsh_generate_cpu_graph() {
 }
 
 cpu_status() {
+  setopt localoptions ksharrays
   if [[ "$ENABLE_ADVANCED_CPU" != true ]]; then
     echo "⚠️ Advanced CPU monitoring disabled. Enable ENABLE_ADVANCED_CPU in config."
     return 1
@@ -2355,9 +2501,9 @@ ai() {
     ulimit -c 0        # No core dumps
     ulimit -n 1024     # Max 1024 open files
 
-    # Execute with explicit word splitting
-    set -f  # Disable globbing
-    eval "$suggested_command"
+    # Execute in a clean child shell with globbing disabled.
+    set -f
+    zsh -fc "$suggested_command"
   )
 
   local exit_code=$?
@@ -2444,7 +2590,7 @@ suggest() {
   esac
 
   echo -e "\n\033[38;2;255;255;0m📚 Most Frequent in This Directory:\033[0m"
-  grep "^$PWD|" "$_ZSH_AI_HISTORY_FILE" 2>/dev/null | cut -d'|' -f2 | \
+  awk -F'|' -v cwd="$PWD" '$1 == cwd {print $2}' "$_ZSH_AI_HISTORY_FILE" 2>/dev/null | \
     sort | uniq -c | sort -nr | head -n 5 | awk '{ $1="  - "; print }'
 }
 
@@ -2645,7 +2791,10 @@ disk() {
   done
 
   if [[ ${#detected_disks[@]} -eq 0 ]]; then
-    mapfile -t detected_disks < <(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}')
+    local detected_name
+    while IFS= read -r detected_name; do
+      [[ -n "$detected_name" ]] && detected_disks+=("$detected_name")
+    done < <(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}')
   fi
 
   for disk in "${detected_disks[@]}"; do
@@ -2658,7 +2807,7 @@ disk() {
     [[ "$model" == *Micron_2450* ]] && color="\033[0;34m"
     [[ "$model" == *TOSHIBA*     ]] && color="\033[0;35m"
 
-    printf "${color}%s\033[0m\t%s\t%s\t%s\n" "$disk" "$size" "$rota" "$model"
+    printf "%b%s\033[0m\t%s\t%s\t%s\n" "$color" "$disk" "$size" "$rota" "$model"
 
     lsblk -ln -o NAME,SIZE,ROTA,MOUNTPOINT "/dev/$disk" |
     while read -r part psize prota mnt; do
@@ -2667,8 +2816,8 @@ disk() {
       local pcolor="$color"
       [[ "$mnt" == "/" ]] && pcolor="\033[0;31m"
 
-      printf "  ${pcolor}%-10s %-8s %-6s %-25s\033[0m\n" \
-        "$part" "$psize" "$prota" "$mnt"
+      printf "  %b%-10s %-8s %-6s %-25s\033[0m\n" \
+        "$pcolor" "$part" "$psize" "$prota" "$mnt"
     done
   done
 
@@ -3094,7 +3243,10 @@ cproj() {
   fi
 
   local -a projects
-  projects=("${base}"/*(/N))
+  local entry
+  for entry in "$base"/*; do
+    [[ -d "$entry" ]] && projects+=("$entry")
+  done
   if (( ${#projects[@]} == 0 )); then
     echo "⚠️ No project directories found in: $base"
     return 1
@@ -3150,7 +3302,7 @@ pathrm() {
 }
 
 pathshow() {
-  print -l $path
+  print -l -- "$path[@]"
 }
 
 extract() {
@@ -3374,8 +3526,8 @@ please() {
     echo "Command: $last_cmd"
   } >> "$audit_log"
 
-  # Execute with proper word splitting
-  sudo sh -c "$last_cmd"
+  # Execute in zsh to preserve expected command behavior.
+  sudo -- zsh -fc "$last_cmd"
   local exit_code=$?
 
   {
@@ -4051,15 +4203,15 @@ perf_dashboard() {
 
     # CPU bar
     local cpu_bar_length=$((cpu_usage / 2))
-    printf "CPU: [%-50s] %3d%%\n" "$(printf "%*s" $cpu_bar_length | tr ' ' '█')" "$cpu_usage"
+    printf "CPU: [%-50s] %3d%%\n" "$(_repeat_char "$cpu_bar_length" "█")" "$cpu_usage"
 
     # Memory bar
     local mem_bar_length=$((memory_info / 2))
-    printf "MEM: [%-50s] %3.0f%%\n" "$(printf "%*s" $mem_bar_length | tr ' ' '█')" "$memory_info"
+    printf "MEM: [%-50s] %3.0f%%\n" "$(_repeat_char "$mem_bar_length" "█")" "$memory_info"
 
     # Disk bar
     local disk_bar_length=$((disk_usage / 2))
-    printf "DSK: [%-50s] %3d%%\n" "$(printf "%*s" $disk_bar_length | tr ' ' '█')" "$disk_usage"
+    printf "DSK: [%-50s] %3d%%\n" "$(_repeat_char "$disk_bar_length" "█")" "$disk_usage"
 
     # Log data if requested
     if [[ "$export_format" == "csv" ]]; then
@@ -4416,11 +4568,6 @@ _op_precmd() {
                 msg3="📋 Check command output for specific error details"
                 msg4="🔍 Review command syntax and parameters"
                 ;;
-            130)
-                msg2="💡 Script terminated with Ctrl+C"
-                msg3="⚡ Operation was interrupted by user"
-                msg4="🔄 Use 'fg' to resume background jobs"
-                ;;
             137)
                 msg2="💡 Process terminated (SIGKILL)"
                 msg3="⚡ Process was forcefully terminated"
@@ -4492,9 +4639,10 @@ _op_precmd() {
 # === OUTPUT SEPARATION HELPER ===
 _op_show_output_separator() {
   if [[ "${_OP_CONFIG[show_output_separator]}" == "true" ]]; then
-    printf "\033[38;2;100;100;100m"
-    printf "%*s" "${_OP_CONFIG[divider_width]}" "" | tr ' ' "${_OP_CONFIG[output_separator_char]}"
-    printf "\033[0m\n"
+    local _w="${_OP_CONFIG[divider_width]:-64}"
+    local _c="${_OP_CONFIG[output_separator_char]:-━}"
+    local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
+    printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
   fi
 }
 
