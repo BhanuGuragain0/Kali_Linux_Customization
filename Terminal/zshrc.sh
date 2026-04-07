@@ -8,7 +8,7 @@
 # cspell:disable-file
 # spell-checker:disable
 # ═══════════════════════════════════════════════════════════════════════════
-# 🚀 Shadow@Bhanu Elite Terminal Environment v4.2.1 ULTIMATE HYBRID 🚀
+# 🚀 Shadow@Bhanu Elite Terminal Environment v1.0.0 ULTIMATE HYBRID 🚀
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Author: Bhanu Guragain (Shadow Junior)
@@ -86,7 +86,11 @@ export LANG="${LANG:-C.UTF-8}"
 
 # Zsh-specific directories
 export ZSH_COMPCACHE_DIR="$XDG_CACHE_HOME/zsh/completion"
-export HISTFILE="$XDG_STATE_HOME/zsh/history"
+
+# History — use Kali Linux default location so ALL history (old + new) is
+# unified. Autosuggestions and Ctrl+R search the same file.
+# Previous XDG path ($XDG_STATE_HOME/zsh/history) split history in two.
+export HISTFILE="$HOME/.zsh_history"
 export HISTSIZE=100000
 export SAVEHIST=100000
 export LESSHISTFILE="-"
@@ -156,7 +160,9 @@ setopt HASH_LIST_ALL
 setopt MENU_COMPLETE
 
 # Correction
-setopt CORRECT
+# CORRECT disabled — false-positives on valid commands (e.g. +whoami, +pwd).
+# Unknown-command suggestions are handled by command-not-found (Section 32B).
+unsetopt CORRECT
 unsetopt CORRECT_ALL
 
 # Globbing
@@ -281,14 +287,16 @@ _zsh_lazy_load_plugins() {
     atinit'zicompinit; zicdreplay'
   zinit light zsh-users/zsh-completions
 
-  # Load UI plugins with slight delay to prevent conflicts
-  zinit ice lucid wait'0.1'
+  # ── UX-CRITICAL: load synchronously ──────────────────────────────────
+  # These MUST be active BEFORE the first prompt so the user sees syntax
+  # highlighting and ghost-text suggestions on the very first keystroke.
+  # This function already runs on first precmd (deferred from boot), so
+  # loading synchronously here does NOT slow down instant-prompt.
   zinit light zdharma-continuum/fast-syntax-highlighting
-
-  # Load utility plugins last (lowest priority)
-  zinit ice lucid wait'0.2'
   zinit light zsh-users/zsh-autosuggestions
-  zinit ice lucid wait'0.2'; zinit light zsh-users/zsh-history-substring-search
+
+  # ── NON-CRITICAL: load with turbo (after prompt) ───────────────────
+  zinit ice lucid wait'0.1'; zinit light zsh-users/zsh-history-substring-search
   zinit ice lucid wait'0.2'; zinit light Aloxaf/fzf-tab
   zinit ice lucid wait'0.2'; zinit light MichaelAquilina/zsh-auto-notify
   zinit ice lucid wait'0.2'; zinit light MichaelAquilina/zsh-you-should-use
@@ -530,40 +538,94 @@ _op_notify() {
     "$message"
 }
 
-# Build separator text safely for any UTF-8 character.
-_op_resolve_divider_width() {
-  local width="${1:-auto}"
-  local resolved=64
+# ============================================================
+# INTERNAL: Resolve terminal width robustly
+# Works in: interactive shell, script, heredoc, agent subshell
+# ============================================================
+_op_get_terminal_width() {
+    emulate -L zsh
+    local _cols=0
 
-  if [[ "$width" == "auto" ]]; then
-    if [[ -n "$COLUMNS" && "$COLUMNS" =~ ^[0-9]+$ ]]; then
-      resolved="$COLUMNS"
-    elif command -v tput >/dev/null 2>&1; then
-      resolved="$(tput cols 2>/dev/null)"
+    # 1. $COLUMNS — set by zsh in interactive shells; most reliable when available
+    if [[ -n "${COLUMNS}" && "${COLUMNS}" =~ '^[0-9]+$' ]]; then
+        _cols=$(( COLUMNS ))
     fi
-  elif [[ "$width" =~ ^[0-9]+$ ]]; then
-    resolved="$width"
-  fi
 
-  [[ "$resolved" =~ ^[0-9]+$ ]] || resolved=64
-  (( resolved < 32 )) && resolved=32
-  (( resolved > 220 )) && resolved=220
-  print -r -- "$resolved"
+    # 2. tput cols — works in scripts if $TERM is set and a real tty is attached
+    if (( _cols <= 0 )) && [[ -t 1 ]] && (( ${+commands[tput]} )); then
+        local _tput_cols
+        _tput_cols=$(tput cols 2>/dev/null)
+        [[ "${_tput_cols}" =~ '^[0-9]+$' ]] && _cols=$(( _tput_cols ))
+    fi
+
+    # 3. stty — last resort, works even without $TERM
+    if (( _cols <= 0 )) && [[ -t 1 ]] && (( ${+commands[stty]} )); then
+        local _stty_out
+        _stty_out=$(stty size 2>/dev/null)
+        # stty size returns "rows cols"
+        local _stty_cols="${_stty_out##* }"
+        [[ "${_stty_cols}" =~ '^[0-9]+$' ]] && _cols=$(( _stty_cols ))
+    fi
+
+    # 4. Hard fallback — agent/non-tty contexts
+    (( _cols <= 0 )) && _cols=80
+
+    # Clamp to sane range: never <10, never >512
+    (( _cols < 10  )) && _cols=80
+    (( _cols > 512 )) && _cols=512
+
+    print -rn -- "${_cols}"
 }
 
+# ============================================================
+# INTERNAL: Build separator string
+#
+# Args:
+#   $1 — width: integer or "auto"  (default: auto)
+#   $2 — char:  any single character, including Unicode (default: ━)
+#
+# Outputs separator to stdout via print -rn
+# Safe against: %, \, :, special chars in $2
+# ============================================================
 _op_build_separator() {
-  local width="${1:-auto}"
-  local char="${2:-━}"
-  local out=""
-  local i
+    emulate -L zsh
 
-  width="$(_op_resolve_divider_width "$width")"
+    local _width="${1:-auto}"
+    local _char="${2:-━}"
+    local _cols _sep _i
 
-  for ((i=0; i<width; i++)); do
-    out+="$char"
-  done
+    # --- Resolve width ---
+    if [[ "${_width}" == "auto" ]]; then
+        _cols=$(_op_get_terminal_width)
+    elif [[ "${_width}" =~ '^[1-9][0-9]*$' ]]; then
+        _cols=$(( _width ))
+        (( _cols < 1   )) && _cols=80
+        (( _cols > 512 )) && _cols=512
+    else
+        # Invalid non-auto value — fall back gracefully
+        _cols=$(_op_get_terminal_width)
+    fi
 
-  print -r -- "$out"
+    # --- Validate char ---
+    # If empty or more than 1 character (grapheme), use default
+    # ${#_char} in zsh counts characters (not bytes) when locale is UTF-8
+    if (( ${#_char} != 1 )); then
+        _char="━"
+    fi
+
+    # --- Build separator ---
+    # Loop is the safest method: works for ANY character including % \ : ; etc.
+    # For max width of 512, this loop is negligible (~microseconds in zsh).
+    # DO NOT use ${(r:N::CHAR:)} — breaks when _char contains ':'
+    # DO NOT use printf '%.0s' — complex and has edge cases with special chars
+    _sep=""
+    for (( _i = 0; _i < _cols; _i++ )); do
+        _sep+="${_char}"
+    done
+
+    # print -rn: -r disables escape interpretation, -n suppresses newline
+    # -- guards against _sep starting with '-'
+    print -rn -- "${_sep}"
 }
 
 _op_render_auth_banner() {
@@ -574,8 +636,12 @@ _op_render_auth_banner() {
   local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
   local _msg="${_OP_CONFIG[auth_banner_text]:-⚠😒 AUTHENTICATION REQUIRED [OPS_Junior 🫩] --- Enter password 🙄 | Failure = SYSTEM BREAK 🤬}"
 
-  printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
-  printf "\033[${_color}m%s\033[0m\n" "$_msg"
+  # Validate ANSI color string to prevent format-string injection
+  if [[ ! "${_color}" =~ '^[0-9]+(;[0-9]+)*$' ]]; then
+    _color="38;2;255;105;180"
+  fi
+  printf '\033[%sm%s\033[0m\n' "${_color}" "$(_op_build_separator "$_w" "$_c")"
+  printf '\033[%sm%s\033[0m\n' "${_color}" "$_msg"
 }
 
 # Wrapper around sudo to show an operator auth banner only when password is required.
@@ -612,7 +678,11 @@ sudo() {
   local _w="${_OP_CONFIG[divider_width]:-auto}"
   local _c="${_OP_CONFIG[output_separator_char]:-━}"
   local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
-  printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
+  # Validate ANSI color string to prevent format-string injection
+  if [[ ! "${_color}" =~ '^[0-9]+(;[0-9]+)*$' ]]; then
+    _color="38;2;255;105;180"
+  fi
+  printf '\033[%sm%s\033[0m\n' "${_color}" "$(_op_build_separator "$_w" "$_c")"
 
   command sudo -n "$@"
 }
@@ -783,7 +853,11 @@ _op_render_execution_header() {
     local _w="${_OP_CONFIG[divider_width]:-auto}"
     local _c="${_OP_CONFIG[output_separator_char]:-━}"
     local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
-    printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
+    # Validate ANSI color string to prevent format-string injection
+    if [[ ! "${_color}" =~ '^[0-9]+(;[0-9]+)*$' ]]; then
+      _color="38;2;255;105;180"
+    fi
+    printf '\033[%sm%s\033[0m\n' "${_color}" "$(_op_build_separator "$_w" "$_c")"
   fi
 }
 
@@ -4850,14 +4924,51 @@ _op_precmd() {
     printf "\033[0m"
 }
 
-# === OUTPUT SEPARATION HELPER ===
+# ============================================================
+# OUTPUT SEPARATION HELPER
+#
+# Reads from _OP_CONFIG associative array.
+# Hardened against:
+#   - Missing/uninitialized _OP_CONFIG
+#   - Malformed color codes
+#   - Non-tty / agent / heredoc contexts
+#   - Option bleed from caller
+#   - printf format string injection
+# ============================================================
 _op_show_output_separator() {
-  if [[ "${_OP_CONFIG[show_output_separator]}" == "true" ]]; then
+    emulate -L zsh
+
+    # --- Guard: _OP_CONFIG must exist and be an associative array ---
+    if [[ "${(t)_OP_CONFIG}" != *association* ]]; then
+        return 0
+    fi
+
+    # --- Guard: feature must be enabled ---
+    [[ "${_OP_CONFIG[show_output_separator]}" == "true" ]] || return 0
+
+    # --- Read config with safe defaults ---
     local _w="${_OP_CONFIG[divider_width]:-auto}"
     local _c="${_OP_CONFIG[output_separator_char]:-━}"
     local _color="${_OP_CONFIG[separator_color]:-38;2;255;105;180}"
-    printf "\033[${_color}m%s\033[0m\n" "$(_op_build_separator "$_w" "$_c")"
-  fi
+
+    # --- Validate color string ---
+    # Must match ANSI SGR format: digits only, separated by semicolons
+    # Reject anything else to prevent format string / escape injection
+    if [[ ! "${_color}" =~ '^[0-9]+(;[0-9]+)*$' ]]; then
+        _color="38;2;255;105;180"   # hot pink fallback
+    fi
+
+    # --- Build separator ---
+    local _sep
+    _sep="$(_op_build_separator "${_w}" "${_c}")"
+
+    # --- Guard: nothing to print ---
+    [[ -z "${_sep}" ]] && return 0
+
+    # --- Output with color ---
+    # CRITICAL: _color is passed as a %s argument, NOT interpolated into the
+    # format string. This completely eliminates format-string injection risk.
+    printf '\033[%sm%s\033[0m\n' "${_color}" "${_sep}"
 }
 
 # === HOOK SYSTEM INITIALIZATION ===
