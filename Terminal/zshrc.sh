@@ -1,12 +1,6 @@
 #!/usr/bin/env zsh
-# shellcheck disable=all
-# noinspection ALL
-# noinspection Typo
-# noinspection SpellCheckingInspection
-# noinspection GrazieInspection
-# cspell:disable
-# cspell:disable-file
-# spell-checker:disable
+# shellcheck shell=zsh
+# shellcheck disable=SC2034,SC2155,SC2086,SC2181
 # ═══════════════════════════════════════════════════════════════════════════
 # 🚀 Shadow@Bhanu Elite Terminal Environment v1.0.0 ULTIMATE HYBRID 🚀
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1067,12 +1061,6 @@ _check_rate_limit() {
   return 0
 }
 
-# Apply rate limiting to sensitive functions
-_apply_rate_limits() {
-  # These will be applied in the actual functions
-  :
-}
-
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 10D: INPUT VALIDATION FRAMEWORK
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1122,6 +1110,7 @@ _validate_number() {
 _validate_path() {
   local path="$1"
   local must_exist="${2:-false}"
+  local allow_absolute="${3:-false}"
 
   # Check for path traversal
   if [[ "$path" == *".."* ]]; then
@@ -1131,7 +1120,7 @@ _validate_path() {
   fi
 
   # Check for absolute paths if not allowed
-  if [[ "$path" == /* ]] && [[ "${3:-false}" != "allow_absolute" ]]; then
+  if [[ "$path" == /* ]] && [[ "$allow_absolute" != "true" ]]; then
     echo "❌ Absolute paths not allowed"
     return 1
   fi
@@ -1145,7 +1134,7 @@ _validate_path() {
   return 0
 }
 
-# Validate URL
+# Validate URL with SSRF protection
 _validate_url() {
   local url="$1"
   local require_https="${2:-false}"
@@ -1162,12 +1151,29 @@ _validate_url() {
     return 1
   fi
 
-  # Block internal IPs (SSRF protection)
-  if [[ "$url" =~ (127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|::1|localhost) ]]; then
-    echo "❌ Internal/private IP addresses blocked"
-    _log_security_event "SSRF_ATTEMPT" "CRITICAL" "Blocked URL: $url"
-    return 1
+  # Extract hostname from URL
+  local hostname
+  hostname=$(echo "$url" | sed -E 's|^https?://([^:/]+).*|\1|')
+
+  # Resolve hostname to IP and check for internal addresses
+  local resolved_ip
+  if command -v getent >/dev/null 2>&1; then
+    resolved_ip=$(getent ahosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1)
+  elif command -v dig >/dev/null 2>&1; then
+    resolved_ip=$(dig +short "$hostname" 2>/dev/null | head -1)
   fi
+
+  # Check both hostname and resolved IP for internal addresses
+  local check_targets=("$hostname")
+  [[ -n "$resolved_ip" ]] && check_targets+=("$resolved_ip")
+
+  for target in "${check_targets[@]}"; do
+    if [[ "$target" =~ ^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|::1|localhost)$ ]]; then
+      echo "❌ Internal/private IP addresses blocked"
+      _log_security_event "SSRF_ATTEMPT" "CRITICAL" "Blocked URL: $url (resolved: $target)"
+      return 1
+    fi
+  done
 
   return 0
 }
@@ -1240,21 +1246,24 @@ secure_sudo() {
     return 1
   fi
 
-  # 2. Check for dangerous characters in all arguments
+# 2. Check for dangerous characters/patterns in all arguments
   local arg
   for arg in "${cmd_array[@]}"; do
-    # Check for shell metacharacters that could enable command injection
-    if [[ "$arg" =~ [\;] ]] || \
-       [[ "$arg" =~ [\|] ]] || \
-       [[ "$arg" =~ [\&] ]] || \
-       [[ "$arg" =~ [\`] ]] || \
-       [[ "$arg" =~ [\$] ]] || \
-       [[ "$arg" =~ [\(] ]] || \
-       [[ "$arg" =~ [\)] ]] || \
-       [[ "$arg" =~ [\<] ]] || \
-       [[ "$arg" =~ [\>] ]]; then
-        _op_notify "failure" "🚨 Dangerous character detected in: $arg"
-        return 1
+    # Check for shell metacharacters and operators that could enable command injection
+    if [[ "$arg" =~ ';' ]] || \
+       [[ "$arg" =~ '|' ]] || \
+       [[ "$arg" =~ '&&' ]] || \
+       [[ "$arg" =~ '||' ]] || \
+       [[ "$arg" =~ '\${' ]] || \
+       [[ "$arg" =~ '\$(' ]] || \
+       [[ "$arg" =~ '`' ]] || \
+       [[ "$arg" =~ '>>' ]] || \
+       [[ "$arg" =~ '<<' ]] || \
+       [[ "$arg" =~ '2>&1' ]] || \
+       [[ "$arg" =~ '<' ]] || \
+       [[ "$arg" =~ '>' ]]; then
+      _op_notify "failure" "🚨 Dangerous pattern detected in: $arg"
+      return 1
     fi
   done
 
@@ -1298,17 +1307,6 @@ threat_color() {
   esac
 }
 
-threat_level_to_text() {
-  case $1 in
-    0) echo "CRITICAL" ;;
-    1) echo "HIGH" ;;
-    2) echo "MEDIUM" ;;
-    3) echo "LOW" ;;
-    4) echo "INFO" ;;
-    *) echo "UNKNOWN" ;;
-  esac
-}
-
 random_color() {
   if [[ ${#ZSH_COLOR_PALETTE[@]} -eq 0 ]]; then
     echo "38;2;255;255;255"
@@ -1341,26 +1339,6 @@ gradient_text() {
     output+="\033[38;2;${r};${g};${b}m${char}\033[0m"
   done
   echo -e "$output"
-}
-
-format_bytes() {
-  setopt localoptions ksharrays
-  local bytes="${1:-0}"
-  local units=("B" "KB" "MB" "GB" "TB" "PB")
-  local unit_index=0
-  local size="$bytes"
-
-  if [[ ! "$size" =~ ^[0-9]+$ ]]; then
-    echo "0B"
-    return 1
-  fi
-
-  while (( size >= 1024 && unit_index < ${#units[@]} - 1 )); do
-    size=$((size / 1024))
-    unit_index=$((unit_index + 1))
-  done
-
-  printf '%s%s\n' "$size" "${units[$unit_index]}"
 }
 
 command_exists() {
@@ -1487,24 +1465,6 @@ loading_animation() {
   echo -e "\033[38;2;0;255;0m✅ Complete\033[0m"
 }
 
-# Multi-stage loading
-loading_multi_stage() {
-  setopt localoptions ksharrays
-  local -a stages=("$@")
-  local total_stages=${#stages[@]}
-
-  for ((i=0; i<total_stages; i++)); do
-    local stage_name="${stages[$i]}"
-    local stage_duration=$((2 + RANDOM % 3))
-
-    echo -e "\n\033[38;2;255;255;0m┏━━ Stage $((i+1))/$total_stages: $stage_name ━━┓\033[0m"
-    loading_animation "$stage_name" "$stage_duration" "" "matrix" "true"
-    sleep 0.5
-  done
-
-  echo -e "\n\033[38;2;0;255;0m🎯 All stages completed successfully!\033[0m"
-}
-
 # Background loading with PID tracking
 loading_background() {
   local message="$1"
@@ -1533,12 +1493,15 @@ loading_background() {
   print -r -- "$spinner_pid" > "$pid_file"
 
   # Secure command execution with validation
-  if [[ "$command" == *$'\n'* || "$command" == *$'\r'* ]] || \
-     [[ ! "$command" =~ ^[a-zA-Z0-9_./:@%+=,\ -]+$ ]]; then
-    echo "🚨 Security: Unsafe command detected"
+  if [[ "$command" == *$'\n'* || "$command" == *$'\r'* ]]; then
+    echo "🚨 Security: Newline/carriage return in command"
     exit_code=1
   else
-    local -a dangerous=('rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs')
+    local -a dangerous=(
+      'rm -rf' 'dd if=' ':(){:|:&};:' 'mkfs' 'wipefs'
+      'fdisk' 'parted' '>/etc' '>>/etc' 'chmod 777' 'chown -R'
+      ';' '&&' '||' '`' '$(' '${' '|sudo' '|sh' '|bash' 'eval' 'exec'
+    )
     local lower_cmd="${command:l}"
     local blocked=false
     local pat
@@ -1551,8 +1514,14 @@ loading_background() {
     done
 
     if [[ "$blocked" == false ]]; then
-      zsh -fc "$command"
-      exit_code=$?
+      # Additional validation: only allow alphanumeric, basic punctuation for simple commands
+      if [[ ! "$command" =~ ^[a-zA-Z0-9_./:@%+=,\ -]+$ ]]; then
+        echo "🚨 Security: Invalid characters in command"
+        exit_code=1
+      else
+        zsh -fc "$command"
+        exit_code=$?
+      fi
     else
       exit_code=1
     fi
@@ -1787,27 +1756,6 @@ matrix_benchmark() {
 typeset -gA _ZSH_CPU_HISTORY=()
 typeset -ga _ZSH_CPU_TIMESTAMPS=()
 typeset -g _ZSH_CPU_MAX_HISTORY=100  # Limit history size
-
-_zsh_init_cpu_monitor() {
-  mkdir -p "$XDG_CACHE_HOME/zsh"
-  _ZSH_CPU_HISTORY=()
-  _ZSH_CPU_TIMESTAMPS=()
-}
-
-_zsh_cleanup_cpu_history() {
-  setopt localoptions ksharrays
-  # Keep only last N entries to prevent memory leaks
-  local current_size=${#_ZSH_CPU_TIMESTAMPS[@]}
-  if [[ $current_size -gt $_ZSH_CPU_MAX_HISTORY ]]; then
-    local trim_count=$((current_size - _ZSH_CPU_MAX_HISTORY))
-    # Clean history keys accordingly
-    local -a keys_to_remove=("${_ZSH_CPU_TIMESTAMPS[@]:0:$trim_count}")
-    _ZSH_CPU_TIMESTAMPS=("${_ZSH_CPU_TIMESTAMPS[@]:$trim_count}")
-    for key in "${keys_to_remove[@]}"; do
-      unset "_ZSH_CPU_HISTORY[$key]"
-    done
-  fi
-}
 
 _zsh_get_cpu_usage() {
   setopt localoptions ksharrays
@@ -2046,6 +1994,7 @@ alias cpu-detailed='_zsh_get_cpu_usage detailed'
 alias cpu-cores='_zsh_get_cpu_usage per-core'
 alias cpu-live='cpu_monitor_live'
 alias cpu-status='cpu_status'
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 14: CACHING SYSTEM
@@ -2400,10 +2349,7 @@ clear() {
     matrix_rain 1
   fi
 
-  loading_animation "🔄 Reinitializing Shadow Systems..." 1.2 "" "pulse" "false"
-
-  command clear
-
+  # Skip loading animation on clear for speed
   show_system_info
   time_based_greeting
 
@@ -2705,32 +2651,75 @@ ai() {
       e|execute)
   # === SECURITY HARDENING v2.0 ===
 
-  # 1. Character whitelist validation
-  if [[ ! "$suggested_command" =~ ^[a-zA-Z0-9_/.\ :,@-]+$ ]]; then
-    _op_notify "failure" "🚨 Invalid characters detected in command"
+  # 1. Validate command against allowlist of safe commands
+  local -a allowed_base_commands=(
+    nmap gobuster nikto curl docker ip docker ps
+    dig nslookup host whois ss netstat ping traceroute
+    systemctl service journalctl
+    git npm cargo pip pip3 python3 node go rustc gcc make cmake
+    kubectl helm terraform ansible
+    ls find grep cat bat less more head tail
+    ps top htop kill pkill pgrep
+    df du free uname lscpu lsmem lsblk
+    tar zip unzip gzip gunzip bzip2 bunzip2 xz
+    ssh scp rsync sftp
+    sudo
+  )
+
+  # Extract base command (first word, stripped of path)
+  local base_cmd="${suggested_command%% *}"
+  base_cmd="${base_cmd##*/}"
+
+  # Check if base command is allowed
+  local cmd_allowed=false
+  for allowed in "${allowed_base_commands[@]}"; do
+    if [[ "$base_cmd" == "$allowed" ]]; then
+      cmd_allowed=true
+      break
+    fi
+  done
+
+  if [[ "$cmd_allowed" != true ]]; then
+    _op_notify "failure" "🚨 Command '$base_cmd' not in AI allowlist"
     return 1
   fi
 
-  # 2. Dangerous pattern blacklist
+  # 2. Dangerous pattern blacklist (comprehensive)
   local -a dangerous_patterns=(
     'rm -rf /'
     'rm -rf ~'
     'rm -rf *'
+    'rm -rf .'
     'dd if='
     ':(){:|:&};:'
     'mkfs'
     'wipefs'
+    'fdisk'
+    'parted'
     '>/etc/'
     '>>/etc/'
+    '>/boot/'
+    '>>/boot/'
     'chmod 777'
     'chmod -R 777'
-    'chown -R'
+    'chown -R root'
     ';'
     '&&'
     '||'
+    '\|\|'
     '`'
-    '$('
-    '|sudo'
+    '\$\{'
+    '\$\('
+    '\|sudo'
+    '\|sh'
+    '\|bash'
+    '\|zsh'
+    'eval'
+    'exec'
+    'source'
+    '\.\.'
+    '>/dev/'
+    '>>/dev/'
   )
 
   for pattern in "${dangerous_patterns[@]}"; do
@@ -2959,17 +2948,7 @@ alias cloud-azure='az_status'
 alias cloud-gcp='gcp_status'
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 25: REDUNDANT - MERGED INTO SECTION 34
-# (Legacy Threat Intelligence removed in favor of Advanced Module)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SECTION 26: REDUNDANT - MERGED INTO SECTION 35
-# (Legacy Dashboard removed in favor of Advanced Module)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SECTION 27: GIT INTEGRATION
+# SECTION 25: GIT INTEGRATION
 # ═══════════════════════════════════════════════════════════════════════════
 
 alias g='git'
@@ -3388,8 +3367,21 @@ usbformat() {
     return 1
   fi
 
-  # 4. Check if device is removable
-  local removable=$(cat "/sys/block/${DEV}/removable" 2>/dev/null || cat "/sys/block/${DEV%[0-9]}/removable" 2>/dev/null)
+  # 4. Check if device is removable (handle NVMe and other device types)
+  local removable=""
+  local base_dev="$DEV"
+
+  # For NVMe devices (nvmeXnYpZ), find the namespace device
+  if [[ "$DEV" =~ ^nvme[0-9]+n[0-9]+p[0-9]+$ ]]; then
+    base_dev="${DEV%p*}"  # nvme0n1p1 -> nvme0n1
+  elif [[ "$DEV" =~ ^nvme[0-9]+n[0-9]+$ ]]; then
+    base_dev="$DEV"  # nvme0n1 (namespace)
+  else
+    # For SCSI/SATA (sdX, sdXN), strip trailing digits
+    base_dev="${DEV%[0-9]}"
+  fi
+
+  removable=$(cat "/sys/block/${DEV}/removable" 2>/dev/null || cat "/sys/block/${base_dev}/removable" 2>/dev/null || echo "0")
 
   if [[ "$removable" != "1" ]]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -3633,25 +3625,32 @@ extract() {
         return 1
       fi
 
+      # Security check: scan for symlinks that could escape
+      if tar -tf "$archive" 2>/dev/null | grep -qE '^l'; then
+        echo "🚨 SECURITY: Archive contains symlinks - BLOCKED"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+
       echo "✅ Security checks passed"
 
-      # Extract based on compression
+      # Extract based on compression with symlink protection
       case "$archive" in
         *.tar.bz2|*.tbz2)
-          tar -xjf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          tar -xjf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names
           ;;
         *.tar.gz|*.tgz)
-          tar -xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          tar -xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names
           ;;
         *.tar.xz|*.txz)
-          tar -xJf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          tar -xJf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names
           ;;
         *.tar.zst|*.tzst)
-          tar --zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions 2>/dev/null || \
-          tar -I zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          tar --zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names 2>/dev/null || \
+          tar -I zstd -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names
           ;;
         *.tar)
-          tar -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+          tar -xf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions --absolute-names
           ;;
       esac
       ;;
@@ -4030,7 +4029,10 @@ alias netstat="ss -tuln"
 alias ports="ss -tulpn"
 alias process="ps aux | head -20"
 alias memory="free -h && echo && ps aux --sort=-%mem | head -10"
-alias kubectl='minikube kubectl --'
+# kubectl alias (only if minikube is available and kubectl isn't)
+if command -v minikube &>/dev/null && ! command -v kubectl &>/dev/null; then
+  alias kubectl='minikube kubectl --'
+fi
 alias nvidia-run='__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia'
 alias ..='cd ..'
 alias ...='cd ../..'
@@ -4380,8 +4382,12 @@ system_hardening() {
         sudo ufw status 2>/dev/null | head -1 || echo "  Unknown"
       elif command -v firewall-cmd &>/dev/null; then
         echo "  firewalld: $(sudo firewall-cmd --state 2>/dev/null || echo 'unknown')"
+      elif command -v nft &>/dev/null; then
+        echo "  nftables: $(sudo nft list ruleset 2>/dev/null | head -1 || echo 'unknown')"
+      elif command -v iptables &>/dev/null; then
+        echo "  iptables: $(sudo iptables -L -n 2>/dev/null | head -1 || echo 'unknown')"
       else
-        echo "  ⚠️  No firewall detected (ufw/firewalld)"
+        echo "  ⚠️  No firewall detected (ufw/firewalld/nftables/iptables)"
       fi
 
       # === FAILED LOGINS ===
@@ -4780,42 +4786,19 @@ _op_precmd() {
         _draw_gradient_border() {
             local width=$1
             local style="$2"
-            local i progress r g b
 
-            # Left cap (white)
-            printf "\033[38;2;255;255;255m─"
-
-            for ((i=1; i<width-1; i++)); do
-                # Simple static gradient based on position
-                progress=$((i * 100 / (width - 1)))
-
-                # Different gradient styles based on error type
-                case "$style" in
-                    "critical")
-                        # Deep red gradient
-                        r=$((255 - progress / 4))
-                        g=$((50 - progress / 8))
-                        b=$((50 - progress / 8))
-                        ;;
-                    "warning")
-                        # Orange-yellow gradient
-                        r=255
-                        g=$((200 - progress / 5))
-                        b=$((50 + progress / 10))
-                        ;;
-                    "flame"|*)
-                        # Default flame gradient
-                        r=$((255 - progress / 6))
-                        g=$((140 - progress / 10))
-                        b=0
-                        ;;
-                esac
-
-                printf "\033[38;2;%d;%d;%dm─" "$r" "$g" "$b"
-            done
-
-            # Right cap (white)
-            printf "\033[38;2;255;255;255m─"
+            # Use pre-computed gradient string instead of per-character computation
+            case "$style" in
+                "critical")
+                    printf "\033[38;2;255;50;50m────────────────────────────────────────\033[0m"
+                    ;;
+                "warning")
+                    printf "\033[38;2;255;200;50m────────────────────────────────────────\033[0m"
+                    ;;
+                "flame"|*)
+                    printf "\033[38;2;255;140;0m────────────────────────────────────────\033[0m"
+                    ;;
+            esac
         }
 
         # Enhanced error messages with more context
@@ -4981,3 +4964,14 @@ _shadow_init_hooks() {
 
 # Initialize hook system
 _shadow_init_hooks
+export PATH="$PATH:/home/bhanu/.npm-global/bin"
+
+# opencode
+export PATH=/home/bhanu/.opencode/bin:$PATH
+
+
+# Added by Antigravity CLI installer
+export PATH="/home/bhanu/.local/bin:$PATH"
+
+# QwenPaw
+export PATH="$HOME/.qwenpaw/bin:$PATH"
